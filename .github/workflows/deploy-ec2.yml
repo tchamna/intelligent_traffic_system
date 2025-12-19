@@ -1,6 +1,6 @@
 name: Deploy to EC2
 
-on:
+'on':
   push:
     branches: [main]
   workflow_dispatch: {}
@@ -77,24 +77,20 @@ jobs:
           fi
 
           if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
-            PORT="$($PYTHON_BIN - <<'PY'
-import socket
-import os
-start = int(os.getenv("PORT_RANGE_START", "8001"))
-end = int(os.getenv("PORT_RANGE_END", "8999"))
-for port in range(start, end + 1):
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.bind(("0.0.0.0", port))
-        s.close()
-        print(port)
-        raise SystemExit(0)
-    except OSError:
-        s.close()
-raise SystemExit(1)
-PY
-            )"
+            LISTEN_PORTS=""
+            if command -v ss >/dev/null 2>&1; then
+              LISTEN_PORTS="$(ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://')"
+            elif command -v netstat >/dev/null 2>&1; then
+              LISTEN_PORTS="$(netstat -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://')"
+            fi
+
+            for p in $(seq "$PORT_RANGE_START" "$PORT_RANGE_END"); do
+              if echo "$LISTEN_PORTS" | grep -qx "$p"; then
+                continue
+              fi
+              PORT="$p"
+              break
+            done
           fi
 
           if [ -z "$PORT" ]; then
