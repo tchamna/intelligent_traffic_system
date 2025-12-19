@@ -130,6 +130,10 @@ jobs:
           if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
             if [ -f /etc/its.env ]; then
               PORT="$(grep -E '^PORT=' /etc/its.env | tail -1 | cut -d= -f2)"
+              if [ -n "$PORT" ] && echo "$PORT" | grep -q '[^0-9]'; then
+                echo "Invalid PORT value '$PORT' in /etc/its.env. Selecting a free port."
+                PORT=""
+              fi
               if [ -n "$PORT" ] && port_in_use "$PORT" && ! port_used_by_its_service "$PORT"; then
                 echo "Port $PORT from /etc/its.env is in use by another process. Selecting a free port."
                 PORT=""
@@ -147,7 +151,7 @@ jobs:
             done
           fi
 
-          if [ -z "$PORT" ]; then
+          if [ -z "$PORT" ] || echo "$PORT" | grep -q '[^0-9]'; then
             echo "Failed to find a free port."
             exit 1
           fi
@@ -161,7 +165,7 @@ jobs:
           SMOOTHING_WINDOW=2.0
           ITS_ENV
 
-          sudo tee /etc/systemd/system/its.service >/dev/null <<'ITS_SERVICE'
+          sudo tee /etc/systemd/system/its.service >/dev/null <<ITS_SERVICE
           [Unit]
           Description=Intelligent Traffic System
           After=network.target
@@ -200,7 +204,7 @@ jobs:
             matches="$(sudo grep -RIl "server_name[[:space:]].*${NGINX_SERVER_NAME}" /etc/nginx/conf.d || true)"
             ts="$(date +%Y%m%d%H%M%S)"
             for f in $matches; do
-              if [ "$f" != "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" ]; then
+              if [ -f "$f" ] && [ "$f" != "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" ]; then
                 sudo mv "$f" "${f}.bak.${ts}"
               fi
             done
