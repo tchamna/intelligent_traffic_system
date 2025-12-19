@@ -207,7 +207,7 @@ jobs:
           fi
 
           sudo mkdir -p /var/www/certbot
-          sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<'NGINX_CONF'
+          sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<NGINX_CONF
           server {
               listen 80;
               server_name ${NGINX_SERVER_NAME};
