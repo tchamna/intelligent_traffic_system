@@ -1,0 +1,78 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          APP_PORT: ${{ secrets.EC2_APP_PORT }}
+          REPO_URL: https://github.com/tchamna/intelligent_traffic_system.git
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          envs: APP_PORT,REPO_URL
+          script: |
+            set -euo pipefail
+            APP_DIR="$HOME/apps/intelligent_traffic_system"
+            PORT="${APP_PORT:-8001}"
+            PYTHON_BIN="python3"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              mkdir -p "$HOME/apps"
+              git clone "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+
+            if [ ! -d ".venv" ]; then
+              $PYTHON_BIN -m venv .venv
+            fi
+            . .venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            deactivate
+
+            sudo tee /etc/its.env >/dev/null <<EOF
+            PORT=$PORT
+            MODEL=yolov8n.pt
+            CONF=0.35
+            THRESHOLD=5
+            YELLOW_DURATION=3.0
+            SMOOTHING_WINDOW=2.0
+            EOF
+
+            sudo tee /etc/systemd/system/its.service >/dev/null <<'EOF'
+            [Unit]
+            Description=Intelligent Traffic System
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=ec2-user
+            WorkingDirectory=/home/ec2-user/apps/intelligent_traffic_system
+            EnvironmentFile=/etc/its.env
+            ExecStart=/home/ec2-user/apps/intelligent_traffic_system/.venv/bin/uvicorn service:app --host 0.0.0.0 --port ${PORT}
+            Restart=always
+            RestartSec=3
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable its.service
+            sudo systemctl restart its.service
+            sudo systemctl status its.service --no-pager -l
