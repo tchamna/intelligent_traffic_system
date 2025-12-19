@@ -560,6 +560,16 @@ def index():
             display: none;
         }
 
+        .ghost {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+            left: -9999px;
+            top: -9999px;
+        }
+
         @media (max-width: 700px) {
             .controls {
                 flex-direction: column;
@@ -624,7 +634,7 @@ def index():
         <div class="hint">Camera access requires HTTPS (or localhost). For sharing on the internet, use a tunnel that provides HTTPS.</div>
     </main>
     <canvas id="capture" class="hidden"></canvas>
-    <video id="camera" autoplay playsinline muted class="hidden"></video>
+    <video id="camera" autoplay playsinline muted class="ghost"></video>
     <script>
         const video = document.getElementById('camera');
         const canvas = document.getElementById('capture');
@@ -693,6 +703,7 @@ def index():
                     audio: false
                 });
                 video.srcObject = stream;
+                await video.play();
                 startBtn.disabled = true;
                 stopBtn.disabled = false;
                 setStatus('Camera active. Running detection...');
