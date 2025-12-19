@@ -1,9 +1,11 @@
 import threading
 import time
 from typing import Dict
+import io
 
 import cv2
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -23,6 +25,7 @@ state: Dict = {
     'light': 'RED',
     'last_seen': 0.0,
     'running': False,
+    'frame': None,  # latest JPEG bytes
 }
 state_lock = threading.Lock()
 
@@ -74,10 +77,20 @@ def detection_loop(source: str = '0', model_name: str = 'yolov8n.pt', conf: floa
 
         controller.update(count)
 
+        # create annotated frame (numpy array) and encode to JPEG
+        try:
+            annotated = r.plot()
+            ret2, jpeg = cv2.imencode('.jpg', annotated)
+            jpeg_bytes = jpeg.tobytes() if ret2 else None
+        except Exception:
+            jpeg_bytes = None
+
         with state_lock:
             state['count'] = count
             state['light'] = controller.get_state()
             state['last_seen'] = time.time()
+            if jpeg_bytes:
+                state['frame'] = jpeg_bytes
 
         # small sleep to avoid hogging CPU, adapt as needed
         time.sleep(0.05)
@@ -85,7 +98,7 @@ def detection_loop(source: str = '0', model_name: str = 'yolov8n.pt', conf: floa
 
 @app.on_event('startup')
 def startup_event():
-    # start background detection thread
+    # start background detection thread (default source 0)
     src = '0'
     t = threading.Thread(target=detection_loop, args=(src, 'yolov8n.pt', 0.35, 5, 3.0), daemon=True)
     t.start()
@@ -102,10 +115,62 @@ def get_status():
         }
 
 
+@app.get('/')
+def index():
+    html = """
+    <html>
+      <head>
+        <title>Vehicle Counter</title>
+      </head>
+      <body>
+        <h3>Live Stream</h3>
+        <img id="stream" src="/stream" width="640" />
+        <h3>Status</h3>
+        <div id="status">Loading...</div>
+        <script>
+          async function updateStatus(){
+            try{
+              const res = await fetch('/status');
+              const j = await res.json();
+              document.getElementById('status').innerText = `Count: ${j.count}  Light: ${j.light}`;
+            }catch(e){ console.error(e); }
+          }
+          setInterval(updateStatus, 1000);
+          updateStatus();
+        </script>
+      </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@app.get('/snapshot')
+def snapshot():
+    with state_lock:
+        frame = state.get('frame')
+    if frame:
+        return Response(content=frame, media_type='image/jpeg')
+    return Response(status_code=204)
+
+
+@app.get('/stream')
+def stream():
+    def gen():
+        boundary = b'--frame\r\n'
+        while True:
+            with state_lock:
+                frame = state.get('frame')
+            if frame:
+                yield boundary
+                yield b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n'
+            time.sleep(0.1)
+
+    return StreamingResponse(gen(), media_type='multipart/x-mixed-replace; boundary=frame')
+
+
 @app.post('/config')
 def update_config(cfg: ConfigUpdate):
-    # for now we only support updating controller settings by restarting thread externally
-    # but echo back requested values
+    # echo back requested values (future: apply live)
     return {'ok': True, 'requested': cfg.dict()}
 
 
