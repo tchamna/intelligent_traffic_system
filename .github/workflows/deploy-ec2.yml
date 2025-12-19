@@ -8,58 +8,76 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+      EC2_USER: ${{ secrets.EC2_USER }}
+      EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+      EC2_SSH_PORT: ${{ secrets.EC2_SSH_PORT }}
+      EC2_APP_PORT: ${{ secrets.EC2_APP_PORT }}
+      EC2_PORT_RANGE_START: ${{ secrets.EC2_PORT_RANGE_START }}
+      EC2_PORT_RANGE_END: ${{ secrets.EC2_PORT_RANGE_END }}
+      NGINX_SERVER_NAME: ${{ secrets.NGINX_SERVER_NAME }}
+      NGINX_SITE_NAME: ${{ secrets.NGINX_SITE_NAME }}
     steps:
       - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          APP_PORT: ${{ secrets.EC2_APP_PORT }}
-          PORT_RANGE_START: ${{ secrets.EC2_PORT_RANGE_START }}
-          PORT_RANGE_END: ${{ secrets.EC2_PORT_RANGE_END }}
-          NGINX_SERVER_NAME: ${{ secrets.NGINX_SERVER_NAME }}
-          NGINX_SITE_NAME: ${{ secrets.NGINX_SITE_NAME }}
-          REPO_URL: https://github.com/tchamna/intelligent_traffic_system.git
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT }}
-          envs: APP_PORT,PORT_RANGE_START,PORT_RANGE_END,NGINX_SERVER_NAME,NGINX_SITE_NAME,REPO_URL
-          script: |
-            set -euo pipefail
-            APP_DIR="$HOME/apps/intelligent_traffic_system"
-            PORT="${APP_PORT:-}"
-            PORT_RANGE_START="${PORT_RANGE_START:-8001}"
-            PORT_RANGE_END="${PORT_RANGE_END:-8999}"
-            NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
-            NGINX_SITE_NAME="${NGINX_SITE_NAME:-intelligent_traffic_system}"
-            PYTHON_BIN="python3"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${EC2_HOST:-}" ] || [ -z "${EC2_USER:-}" ] || [ -z "${EC2_SSH_KEY:-}" ]; then
+            echo "Missing required secrets: EC2_HOST, EC2_USER, EC2_SSH_KEY"
+            exit 1
+          fi
 
-            if [ ! -d "$APP_DIR/.git" ]; then
-              mkdir -p "$HOME/apps"
-              git clone "$REPO_URL" "$APP_DIR"
+          mkdir -p ~/.ssh
+          printf "%s" "$EC2_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          SSH_PORT="${EC2_SSH_PORT:-22}"
+          APP_PORT="${EC2_APP_PORT:-}"
+          PORT_RANGE_START="${EC2_PORT_RANGE_START:-8001}"
+          PORT_RANGE_END="${EC2_PORT_RANGE_END:-8999}"
+          NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
+          NGINX_SITE_NAME="${NGINX_SITE_NAME:-intelligent_traffic_system}"
+
+          ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
+            "${EC2_USER}@${EC2_HOST}" \
+            "APP_PORT='${APP_PORT}' PORT_RANGE_START='${PORT_RANGE_START}' PORT_RANGE_END='${PORT_RANGE_END}' NGINX_SERVER_NAME='${NGINX_SERVER_NAME}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' bash -s" <<'EOF'
+          set -euo pipefail
+          APP_DIR="$HOME/apps/intelligent_traffic_system"
+          REPO_URL="https://github.com/tchamna/intelligent_traffic_system.git"
+          PYTHON_BIN="python3"
+          PORT="${APP_PORT:-}"
+          PORT_RANGE_START="${PORT_RANGE_START:-8001}"
+          PORT_RANGE_END="${PORT_RANGE_END:-8999}"
+          NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
+          NGINX_SITE_NAME="${NGINX_SITE_NAME:-intelligent_traffic_system}"
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            mkdir -p "$HOME/apps"
+            git clone "$REPO_URL" "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+          git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+
+          if [ ! -d ".venv" ]; then
+            $PYTHON_BIN -m venv .venv
+          fi
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          deactivate
+
+          if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
+            if [ -f /etc/its.env ]; then
+              PORT="$(grep -E '^PORT=' /etc/its.env | tail -1 | cut -d= -f2)"
             fi
+          fi
 
-            cd "$APP_DIR"
-            git fetch origin main
-            git checkout main
-            git pull --ff-only origin main
-
-            if [ ! -d ".venv" ]; then
-              $PYTHON_BIN -m venv .venv
-            fi
-            . .venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
-            deactivate
-
-            if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
-              if [ -f /etc/its.env ]; then
-                PORT="$(grep -E '^PORT=' /etc/its.env | tail -1 | cut -d= -f2)"
-              fi
-            fi
-
-            if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
-              PORT="$($PYTHON_BIN - <<'PY'
+          if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
+            PORT="$($PYTHON_BIN - <<'PY'
 import socket
 import os
 start = int(os.getenv("PORT_RANGE_START", "8001"))
@@ -76,80 +94,81 @@ for port in range(start, end + 1):
         s.close()
 raise SystemExit(1)
 PY
-              )"
-            fi
+            )"
+          fi
 
-            if [ -z "$PORT" ]; then
-              echo "Failed to find a free port."
+          if [ -z "$PORT" ]; then
+            echo "Failed to find a free port."
+            exit 1
+          fi
+
+          sudo tee /etc/its.env >/dev/null <<EOF
+          PORT=$PORT
+          MODEL=yolov8n.pt
+          CONF=0.35
+          THRESHOLD=5
+          YELLOW_DURATION=3.0
+          SMOOTHING_WINDOW=2.0
+          EOF
+
+          sudo tee /etc/systemd/system/its.service >/dev/null <<'EOF'
+          [Unit]
+          Description=Intelligent Traffic System
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/apps/intelligent_traffic_system
+          EnvironmentFile=/etc/its.env
+          ExecStart=/home/ec2-user/apps/intelligent_traffic_system/.venv/bin/uvicorn service:app --host 0.0.0.0 --port ${PORT}
+          Restart=always
+          RestartSec=3
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable its.service
+          sudo systemctl restart its.service
+          sudo systemctl status its.service --no-pager -l
+
+          if ! command -v nginx >/dev/null 2>&1; then
+            if command -v yum >/dev/null 2>&1; then
+              sudo yum install -y nginx
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update -y
+              sudo apt-get install -y nginx
+            else
+              echo "Nginx not installed and no package manager found."
               exit 1
             fi
+          fi
 
-            sudo tee /etc/its.env >/dev/null <<EOF
-            PORT=$PORT
-            MODEL=yolov8n.pt
-            CONF=0.35
-            THRESHOLD=5
-            YELLOW_DURATION=3.0
-            SMOOTHING_WINDOW=2.0
-            EOF
+          sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<EOF
+          server {
+              listen 80;
+              server_name ${NGINX_SERVER_NAME};
+              client_max_body_size 25m;
 
-            sudo tee /etc/systemd/system/its.service >/dev/null <<'EOF'
-            [Unit]
-            Description=Intelligent Traffic System
-            After=network.target
+              location / {
+                  proxy_pass http://127.0.0.1:${PORT};
+                  proxy_http_version 1.1;
+                  proxy_set_header Host \$host;
+                  proxy_set_header X-Real-IP \$remote_addr;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+                  proxy_read_timeout 120s;
+              }
+          }
+          EOF
 
-            [Service]
-            Type=simple
-            User=ec2-user
-            WorkingDirectory=/home/ec2-user/apps/intelligent_traffic_system
-            EnvironmentFile=/etc/its.env
-            ExecStart=/home/ec2-user/apps/intelligent_traffic_system/.venv/bin/uvicorn service:app --host 0.0.0.0 --port ${PORT}
-            Restart=always
-            RestartSec=3
+          sudo nginx -t
+          sudo systemctl enable nginx
+          sudo systemctl restart nginx
+          sudo systemctl status nginx --no-pager -l
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
-
-            sudo systemctl daemon-reload
-            sudo systemctl enable its.service
-            sudo systemctl restart its.service
-            sudo systemctl status its.service --no-pager -l
-
-            if ! command -v nginx >/dev/null 2>&1; then
-              if command -v yum >/dev/null 2>&1; then
-                sudo yum install -y nginx
-              elif command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update -y
-                sudo apt-get install -y nginx
-              else
-                echo "Nginx not installed and no package manager found."
-                exit 1
-              fi
-            fi
-
-            sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<EOF
-            server {
-                listen 80;
-                server_name ${NGINX_SERVER_NAME};
-                client_max_body_size 25m;
-
-                location / {
-                    proxy_pass http://127.0.0.1:${PORT};
-                    proxy_http_version 1.1;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 120s;
-                }
-            }
-            EOF
-
-            sudo nginx -t
-            sudo systemctl enable nginx
-            sudo systemctl restart nginx
-            sudo systemctl status nginx --no-pager -l
-
-            echo "Deployed: http://${NGINX_SERVER_NAME}/"
-            echo "Direct port on host: ${PORT}"
+          echo "Deployed: http://${NGINX_SERVER_NAME}/"
+          echo "Direct port: ${PORT}"
+          EOF
