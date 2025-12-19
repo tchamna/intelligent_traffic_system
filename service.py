@@ -564,16 +564,9 @@ def index():
     <main class="app">
         <header>
             <h1>Traffic Light Vehicle Counter</h1>
-            <p>Open your camera, point it at traffic, and the counter and light state will update in real time.</p>
+            <p>Allow camera access to feed the model. Only the AI output is shown below.</p>
         </header>
         <section class="grid">
-            <div class="card">
-                <h2>Live Camera</h2>
-                <div class="media">
-                    <video id="camera" autoplay playsinline muted></video>
-                </div>
-                <div class="hint">Your camera stream stays on this page; frames are sent to the server for detection.</div>
-            </div>
             <div class="card">
                 <h2>AI View</h2>
                 <div class="media">
@@ -608,7 +601,7 @@ def index():
             </div>
         </section>
         <section class="controls">
-            <button id="startBtn">Start camera</button>
+            <button id="startBtn">Start detection</button>
             <button id="stopBtn" class="secondary" disabled>Stop</button>
             <button id="flipBtn" class="secondary">Flip view</button>
             <div class="control">
@@ -617,10 +610,11 @@ def index():
                 <span id="fpsValue">4 fps</span>
             </div>
         </section>
-        <div class="status" id="status">Idle. Click "Start camera" to begin.</div>
+        <div class="status" id="status">Idle. Click "Start detection" to begin.</div>
         <div class="hint">Camera access requires HTTPS (or localhost). For sharing on the internet, use a tunnel that provides HTTPS.</div>
     </main>
     <canvas id="capture" class="hidden"></canvas>
+    <video id="camera" autoplay playsinline muted class="hidden"></video>
     <script>
         const video = document.getElementById('camera');
         const canvas = document.getElementById('capture');
