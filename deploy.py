@@ -306,7 +306,7 @@ def deploy():
     port_range_start = parse_int(get_env("PORT_RANGE_START", "8001")) or 8001
     port_range_end = parse_int(get_env("PORT_RANGE_END", "8999")) or 8999
 
-    model_name = get_env("MODEL", "yolov8n.pt")
+    model_name = get_env("MODEL", "yolov8l.pt")
     conf = get_env("CONF", "0.2")
     threshold = get_env("THRESHOLD", "5")
     yellow_duration = get_env("YELLOW_DURATION", "3.0")

@@ -158,7 +158,7 @@ jobs:
 
           sudo tee /etc/its.env >/dev/null <<ITS_ENV
           PORT=$PORT
-          MODEL=yolov8n.pt
+          MODEL=yolov8l.pt
           CONF=0.2
           THRESHOLD=5
           YELLOW_DURATION=3.0

@@ -27,7 +27,7 @@ class ConfigUpdate(BaseModel):
 MODEL_NANO_NAME = os.environ.get('MODEL_NANO', 'yolov8n.pt')
 MODEL_MEDIUM_NAME = os.environ.get('MODEL_MEDIUM', 'yolov8m.pt')
 MODEL_LARGE_NAME = os.environ.get('MODEL_LARGE', 'yolov8l.pt')
-MODEL_NAME = os.environ.get('MODEL', MODEL_NANO_NAME)
+MODEL_NAME = os.environ.get('MODEL', MODEL_LARGE_NAME)
 CONFIDENCE = float(os.environ.get('CONF', '0.2'))
 THRESHOLD = int(os.environ.get('THRESHOLD', '5'))
 YELLOW_DURATION = float(os.environ.get('YELLOW_DURATION', '3.0'))
@@ -73,22 +73,29 @@ class SessionState:
     def __init__(self):
         self.controller = TrafficLightController(threshold=THRESHOLD, yellow_duration=YELLOW_DURATION)
         self.controller.set_timing(MIN_GREEN_TIME, MIN_RED_TIME, HYSTERESIS)
-        self.counts = deque()
+        self.counts = {name: deque() for name in ALLOWED_MODELS}
         self.last_seen = time.time()
         self.last_count = 0
         self.last_light = 'RED'
 
-    def update(self, vehicle_count: int):
+    def update_counts(self, counts: Dict[str, int], selected_model: str):
         now = time.time()
         self.last_seen = now
-        self.counts.append((now, vehicle_count))
-        while self.counts and (now - self.counts[0][0]) > SMOOTHING_WINDOW:
-            self.counts.popleft()
-        avg_count = int(round(sum(c for _, c in self.counts) / max(1, len(self.counts))))
-        self.controller.update(avg_count)
-        self.last_count = avg_count
+        avg_counts = {}
+        for name, count in counts.items():
+            bucket = self.counts.get(name)
+            if bucket is None:
+                bucket = deque()
+                self.counts[name] = bucket
+            bucket.append((now, count))
+            while bucket and (now - bucket[0][0]) > SMOOTHING_WINDOW:
+                bucket.popleft()
+            avg_counts[name] = int(round(sum(c for _, c in bucket) / max(1, len(bucket))))
+        selected_avg = avg_counts.get(selected_model, 0)
+        self.controller.update(selected_avg)
+        self.last_count = selected_avg
         self.last_light = self.controller.get_state()
-        return avg_count, self.last_light
+        return avg_counts, self.last_light
 
 
 def load_model(name: str):
@@ -519,6 +526,25 @@ def index():
             font-weight: 600;
         }
 
+        .count-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 13px;
+        }
+
+        .count-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .count-name {
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
         .light {
             background: #131313;
             border-radius: 18px;
@@ -685,7 +711,7 @@ def index():
                     </div>
                     <div class="metric-bottom count-pill">
                         <div class="label">Vehicles</div>
-                        <div class="value" id="countValue">0</div>
+                        <div class="count-list" id="countList"></div>
                     </div>
                 </div>
             </div>
@@ -701,7 +727,8 @@ def index():
             </div>
             <div class="control">
                 <label for="threshold">Threshold</label>
-                <input id="threshold" type="number" min="0" step="1" value="5" />
+                <input id="threshold" type="range" min="0" max="20" step="1" value="5" />
+                <span id="thresholdValue">5</span>
                 <button id="applyThreshold" class="secondary" type="button">Apply</button>
             </div>
             <div class="control">
@@ -709,7 +736,7 @@ def index():
                 <select id="modelSelect">
                     <option value="yolov8n.pt">Nano</option>
                     <option value="yolov8m.pt">Medium</option>
-                    <option value="yolov8l.pt">Large</option>
+                    <option value="yolov8l.pt" selected>Large</option>
                 </select>
                 <button id="applyModel" class="secondary" type="button">Load</button>
             </div>
@@ -723,7 +750,7 @@ def index():
         const video = document.getElementById('camera');
         const canvas = document.getElementById('capture');
         const annotated = document.getElementById('annotated');
-        const countValue = document.getElementById('countValue');
+        const countList = document.getElementById('countList');
         const carLight = document.getElementById('carLight');
         const carLightText = document.getElementById('carLightText');
         const pedLight = document.getElementById('pedLight');
@@ -736,11 +763,14 @@ def index():
         const flipBtn = document.getElementById('flipBtn');
         const thresholdInput = document.getElementById('threshold');
         const applyThresholdBtn = document.getElementById('applyThreshold');
+        const thresholdValue = document.getElementById('thresholdValue');
         const modelSelect = document.getElementById('modelSelect');
         const applyModelBtn = document.getElementById('applyModel');
 
         const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
         annotated.src = placeholder;
+        buildCountList(Array.from(modelSelect.options).map((opt) => opt.value));
+        updateThresholdDisplay();
 
         let stream = null;
         let timer = null;
@@ -781,6 +811,10 @@ def index():
             }
         }
 
+        function updateThresholdDisplay() {
+            thresholdValue.textContent = thresholdInput.value;
+        }
+
         function modelLabel(name) {
             const lower = name.toLowerCase();
             if (lower.includes('yolov8n')) {
@@ -795,6 +829,39 @@ def index():
             return name;
         }
 
+        function buildCountList(models) {
+            countList.innerHTML = '';
+            models.forEach((name) => {
+                const row = document.createElement('div');
+                row.className = 'count-row';
+                row.dataset.model = name;
+                const label = document.createElement('span');
+                label.className = 'count-name';
+                label.textContent = modelLabel(name) + ':';
+                const value = document.createElement('span');
+                value.className = 'count-value';
+                value.textContent = '0';
+                row.appendChild(label);
+                row.appendChild(value);
+                countList.appendChild(row);
+            });
+        }
+
+        function updateCounts(counts) {
+            if (!counts) {
+                return;
+            }
+            Object.entries(counts).forEach(([name, value]) => {
+                const row = countList.querySelector(`.count-row[data-model="${name}"]`);
+                if (row) {
+                    const valueEl = row.querySelector('.count-value');
+                    if (valueEl) {
+                        valueEl.textContent = value;
+                    }
+                }
+            });
+        }
+
         async function loadConfig() {
             try {
                 const res = await fetch('/config');
@@ -804,6 +871,7 @@ def index():
                 const data = await res.json();
                 if (typeof data.threshold === 'number') {
                     thresholdInput.value = data.threshold;
+                    thresholdValue.textContent = data.threshold;
                 }
                 if (Array.isArray(data.models) && data.models.length) {
                     modelSelect.innerHTML = '';
@@ -813,6 +881,7 @@ def index():
                         opt.textContent = modelLabel(name);
                         modelSelect.appendChild(opt);
                     });
+                    buildCountList(data.models);
                 }
                 if (typeof data.model === 'string') {
                     modelSelect.value = data.model;
@@ -933,8 +1002,8 @@ def index():
                     if (data.image) {
                         annotated.src = 'data:image/jpeg;base64,' + data.image;
                     }
-                    if (typeof data.count === 'number') {
-                        countValue.textContent = data.count;
+                    if (data.counts) {
+                        updateCounts(data.counts);
                     }
                     if (data.light) {
                         updateLight(data.light);
@@ -949,6 +1018,7 @@ def index():
         }
 
         fpsInput.addEventListener('input', updateInterval);
+        thresholdInput.addEventListener('input', updateThresholdDisplay);
         startBtn.addEventListener('click', startCamera);
         stopBtn.addEventListener('click', stopCamera);
         flipBtn.addEventListener('click', () => {
@@ -1024,6 +1094,11 @@ def update_config(cfg: ConfigUpdate):
                     session.controller.threshold = THRESHOLD
                 if 'yellow_duration' in updates:
                     session.controller.yellow_duration = YELLOW_DURATION
+    if 'model' in updates:
+        with sessions_lock:
+            for session in sessions.values():
+                session.controller = TrafficLightController(threshold=THRESHOLD, yellow_duration=YELLOW_DURATION)
+                session.controller.set_timing(MIN_GREEN_TIME, MIN_RED_TIME, HYSTERESIS)
     return {'ok': True, 'updated': updates or cfg.dict()}
 
 
@@ -1059,18 +1134,27 @@ async def infer(request: Request, response: Response):
     with state_lock:
         conf = float(state.get('conf', CONFIDENCE))
         model_name = state.get('model', MODEL_NAME)
-    r, raw_count = run_inference_with_conf(frame, model_name, conf)
-    avg_count, light_state = session.update(raw_count)
+    counts = {}
+    selected_result = None
+    for name in ALLOWED_MODELS:
+        r, count = run_inference_with_conf(frame, name, conf)
+        counts[name] = count
+        if name == model_name:
+            selected_result = r
+    if selected_result is None:
+        selected_result = r
+    avg_counts, light_state = session.update_counts(counts, model_name)
 
     try:
-        annotated = r.plot()
+        annotated = selected_result.plot()
         ret, jpeg = cv2.imencode('.jpg', annotated)
         image_b64 = base64.b64encode(jpeg.tobytes()).decode('ascii') if ret else ''
     except Exception:
         image_b64 = ''
 
     return {
-        'count': avg_count,
+        'counts': avg_counts,
+        'model': model_name,
         'light': light_state,
         'image': image_b64,
     }
