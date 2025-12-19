@@ -174,7 +174,7 @@ def is_port_used_by_service_remote(ec2_host, ec2_user, key_path, port, service_n
     owner = get_listen_owner_remote(ec2_host, ec2_user, key_path, port)
     if not owner:
         return False
-    if f"pid={pid}" in owner or owner.startswith(f\"{pid}/\"):
+    if f"pid={pid}" in owner or owner.startswith(f"{pid}/"):
         return True
     return False
 
