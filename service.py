@@ -19,11 +19,12 @@ from app import TrafficLightController
 class ConfigUpdate(BaseModel):
     threshold: Optional[int] = None
     yellow_duration: Optional[float] = None
+    conf: Optional[float] = None
     source: Optional[str] = None
 
 
 MODEL_NAME = os.environ.get('MODEL', 'yolov8n.pt')
-CONFIDENCE = float(os.environ.get('CONF', '0.35'))
+CONFIDENCE = float(os.environ.get('CONF', '0.2'))
 THRESHOLD = int(os.environ.get('THRESHOLD', '5'))
 YELLOW_DURATION = float(os.environ.get('YELLOW_DURATION', '3.0'))
 MIN_GREEN_TIME = float(os.environ.get('MIN_GREEN_TIME', '5.0'))
@@ -48,6 +49,7 @@ state: Dict = {
     'source': '0',
     'threshold': THRESHOLD,
     'yellow_duration': YELLOW_DURATION,
+    'conf': CONFIDENCE,
 }
 state_lock = threading.Lock()
 
@@ -118,8 +120,10 @@ def count_vehicles(result, vehicle_classes, names):
 
 def run_inference(frame):
     model_ref = load_model()
+    with state_lock:
+        conf = float(state.get('conf', CONFIDENCE))
     with model_lock:
-        results = model_ref.predict(source=frame, conf=CONFIDENCE, verbose=False)
+        results = model_ref.predict(source=frame, conf=conf, verbose=False)
     r = results[0]
     count = count_vehicles(r, COUNT_CLASSES, model_ref.names)
     return r, count
@@ -190,6 +194,7 @@ def detection_loop(source: str = '0', conf: float = 0.35, threshold: int = 5, ye
         state['running'] = True
         state['threshold'] = int(threshold)
         state['yellow_duration'] = float(yellow_duration)
+        state['conf'] = float(conf)
 
     current_source = source
     while True:
@@ -919,7 +924,7 @@ def stream():
 @app.post('/config')
 def update_config(cfg: ConfigUpdate):
     updates = {}
-    global THRESHOLD, YELLOW_DURATION
+    global THRESHOLD, YELLOW_DURATION, CONFIDENCE
     with state_lock:
         if cfg.source is not None:
             state['source'] = cfg.source
@@ -932,6 +937,10 @@ def update_config(cfg: ConfigUpdate):
             YELLOW_DURATION = max(0.0, float(cfg.yellow_duration))
             state['yellow_duration'] = YELLOW_DURATION
             updates['yellow_duration'] = YELLOW_DURATION
+        if cfg.conf is not None:
+            CONFIDENCE = max(0.01, min(0.95, float(cfg.conf)))
+            state['conf'] = CONFIDENCE
+            updates['conf'] = CONFIDENCE
     if 'threshold' in updates or 'yellow_duration' in updates:
         with sessions_lock:
             for session in sessions.values():
@@ -948,6 +957,7 @@ def get_config():
         return {
             'threshold': state.get('threshold', THRESHOLD),
             'yellow_duration': state.get('yellow_duration', YELLOW_DURATION),
+            'conf': state.get('conf', CONFIDENCE),
             'source': state.get('source', '0'),
         }
 
