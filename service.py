@@ -20,11 +20,13 @@ class ConfigUpdate(BaseModel):
     threshold: Optional[int] = None
     yellow_duration: Optional[float] = None
     conf: Optional[float] = None
+    model: Optional[str] = None
     source: Optional[str] = None
 
 
 MODEL_NANO_NAME = os.environ.get('MODEL_NANO', 'yolov8n.pt')
 MODEL_MEDIUM_NAME = os.environ.get('MODEL_MEDIUM', 'yolov8m.pt')
+MODEL_LARGE_NAME = os.environ.get('MODEL_LARGE', 'yolov8l.pt')
 MODEL_NAME = os.environ.get('MODEL', MODEL_NANO_NAME)
 CONFIDENCE = float(os.environ.get('CONF', '0.2'))
 THRESHOLD = int(os.environ.get('THRESHOLD', '5'))
@@ -38,6 +40,7 @@ SERVER_CAPTURE = os.environ.get('SERVER_CAPTURE', '0') == '1'
 COUNT_CLASSES = set(
     s.strip() for s in os.environ.get('COUNT_CLASSES', 'car,motorcycle,bus,truck').split(',') if s.strip()
 )
+ALLOWED_MODELS = [MODEL_NANO_NAME, MODEL_MEDIUM_NAME, MODEL_LARGE_NAME]
 
 app = FastAPI()
 
@@ -52,6 +55,7 @@ state: Dict = {
     'threshold': THRESHOLD,
     'yellow_duration': YELLOW_DURATION,
     'conf': CONFIDENCE,
+    'model': MODEL_NAME,
 }
 state_lock = threading.Lock()
 
@@ -67,36 +71,24 @@ cleanup_interval = 60.0
 
 class SessionState:
     def __init__(self):
-        self.nano_controller = TrafficLightController(threshold=THRESHOLD, yellow_duration=YELLOW_DURATION)
-        self.nano_controller.set_timing(MIN_GREEN_TIME, MIN_RED_TIME, HYSTERESIS)
-        self.medium_controller = TrafficLightController(threshold=THRESHOLD, yellow_duration=YELLOW_DURATION)
-        self.medium_controller.set_timing(MIN_GREEN_TIME, MIN_RED_TIME, HYSTERESIS)
-        self.nano_counts = deque()
-        self.medium_counts = deque()
+        self.controller = TrafficLightController(threshold=THRESHOLD, yellow_duration=YELLOW_DURATION)
+        self.controller.set_timing(MIN_GREEN_TIME, MIN_RED_TIME, HYSTERESIS)
+        self.counts = deque()
         self.last_seen = time.time()
-        self.last_count_nano = 0
-        self.last_count_medium = 0
-        self.last_light_nano = 'RED'
-        self.last_light_medium = 'RED'
+        self.last_count = 0
+        self.last_light = 'RED'
 
-    def _update_one(self, now: float, vehicle_count: int, counts: deque, controller: TrafficLightController):
-        counts.append((now, vehicle_count))
-        while counts and (now - counts[0][0]) > SMOOTHING_WINDOW:
-            counts.popleft()
-        avg_count = int(round(sum(c for _, c in counts) / max(1, len(counts))))
-        controller.update(avg_count)
-        return avg_count, controller.get_state()
-
-    def update_dual(self, nano_count: int, medium_count: int):
+    def update(self, vehicle_count: int):
         now = time.time()
         self.last_seen = now
-        avg_nano, light_nano = self._update_one(now, nano_count, self.nano_counts, self.nano_controller)
-        avg_med, light_med = self._update_one(now, medium_count, self.medium_counts, self.medium_controller)
-        self.last_count_nano = avg_nano
-        self.last_light_nano = light_nano
-        self.last_count_medium = avg_med
-        self.last_light_medium = light_med
-        return avg_nano, light_nano, avg_med, light_med
+        self.counts.append((now, vehicle_count))
+        while self.counts and (now - self.counts[0][0]) > SMOOTHING_WINDOW:
+            self.counts.popleft()
+        avg_count = int(round(sum(c for _, c in self.counts) / max(1, len(self.counts))))
+        self.controller.update(avg_count)
+        self.last_count = avg_count
+        self.last_light = self.controller.get_state()
+        return avg_count, self.last_light
 
 
 def load_model(name: str):
@@ -144,7 +136,8 @@ def run_inference_with_conf(frame, model_name: str, conf: float):
 def run_inference(frame):
     with state_lock:
         conf = float(state.get('conf', CONFIDENCE))
-    return run_inference_with_conf(frame, MODEL_NAME, conf)
+        model_name = state.get('model', MODEL_NAME)
+    return run_inference_with_conf(frame, model_name, conf)
 
 
 def decode_image(data: bytes):
@@ -281,8 +274,7 @@ def detection_loop(source: str = '0', conf: float = 0.35, threshold: int = 5, ye
 
 @app.on_event('startup')
 def startup_event():
-    load_model(MODEL_NANO_NAME)
-    load_model(MODEL_MEDIUM_NAME)
+    load_model(MODEL_NAME)
     if SERVER_CAPTURE:
         src = os.environ.get('SOURCE', '0')
         conf = float(os.environ.get('CONF', 0.35))
@@ -648,12 +640,6 @@ def index():
             }
         }
 
-        @media (min-width: 1100px) {
-            .grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-        }
-
         @media (min-width: 900px) {
             .ai-layout {
                 grid-template-columns: minmax(120px, 160px) minmax(0, 1fr) minmax(120px, 160px);
@@ -670,66 +656,36 @@ def index():
     <main class="app">
         <header>
             <h1>Intelligent Traffic System</h1>
-            <p>Compare YOLOv8 Nano vs Medium on the same camera feed.</p>
+            <p>Select a model and start detection.</p>
         </header>
         <section class="grid">
             <div class="card">
-                <h2>Nano (yolov8n)</h2>
+                <h2>AI View</h2>
                 <div class="ai-layout">
                     <div class="light-card car-light">
                         <div class="light-title">Car</div>
-                        <div class="light" id="carLightNano" data-light="RED">
+                        <div class="light" id="carLight" data-light="RED">
                             <div class="bulb red"></div>
                             <div class="bulb yellow"></div>
                             <div class="bulb green"></div>
-                            <div class="light-label" id="carLightTextNano">RED</div>
+                            <div class="light-label" id="carLightText">RED</div>
                         </div>
                     </div>
                     <div class="media">
-                        <img id="annotatedNano" alt="Nano detections" />
+                        <img id="annotated" alt="Annotated detections" />
                     </div>
                     <div class="light-card ped-light">
                         <div class="light-title">Pedestrian</div>
-                        <div class="light" id="pedLightNano" data-light="GREEN">
+                        <div class="light" id="pedLight" data-light="GREEN">
                             <div class="bulb red"></div>
                             <div class="bulb yellow"></div>
                             <div class="bulb green"></div>
-                            <div class="light-label" id="pedLightTextNano">GREEN</div>
+                            <div class="light-label" id="pedLightText">GREEN</div>
                         </div>
                     </div>
                     <div class="metric-bottom count-pill">
                         <div class="label">Vehicles</div>
-                        <div class="value" id="countNano">0</div>
-                    </div>
-                </div>
-            </div>
-            <div class="card">
-                <h2>Medium (yolov8m)</h2>
-                <div class="ai-layout">
-                    <div class="light-card car-light">
-                        <div class="light-title">Car</div>
-                        <div class="light" id="carLightMedium" data-light="RED">
-                            <div class="bulb red"></div>
-                            <div class="bulb yellow"></div>
-                            <div class="bulb green"></div>
-                            <div class="light-label" id="carLightTextMedium">RED</div>
-                        </div>
-                    </div>
-                    <div class="media">
-                        <img id="annotatedMedium" alt="Medium detections" />
-                    </div>
-                    <div class="light-card ped-light">
-                        <div class="light-title">Pedestrian</div>
-                        <div class="light" id="pedLightMedium" data-light="GREEN">
-                            <div class="bulb red"></div>
-                            <div class="bulb yellow"></div>
-                            <div class="bulb green"></div>
-                            <div class="light-label" id="pedLightTextMedium">GREEN</div>
-                        </div>
-                    </div>
-                    <div class="metric-bottom count-pill">
-                        <div class="label">Vehicles</div>
-                        <div class="value" id="countMedium">0</div>
+                        <div class="value" id="countValue">0</div>
                     </div>
                 </div>
             </div>
@@ -748,6 +704,15 @@ def index():
                 <input id="threshold" type="number" min="0" step="1" value="5" />
                 <button id="applyThreshold" class="secondary" type="button">Apply</button>
             </div>
+            <div class="control">
+                <label for="modelSelect">Model</label>
+                <select id="modelSelect">
+                    <option value="yolov8n.pt">Nano</option>
+                    <option value="yolov8m.pt">Medium</option>
+                    <option value="yolov8l.pt">Large</option>
+                </select>
+                <button id="applyModel" class="secondary" type="button">Load</button>
+            </div>
         </section>
         <div class="status" id="status">Idle. Click "Start detection" to begin.</div>
         <div class="hint">Camera access requires HTTPS (or localhost). For sharing on the internet, use a tunnel that provides HTTPS.</div>
@@ -757,18 +722,12 @@ def index():
     <script>
         const video = document.getElementById('camera');
         const canvas = document.getElementById('capture');
-        const annotatedNano = document.getElementById('annotatedNano');
-        const annotatedMedium = document.getElementById('annotatedMedium');
-        const countNano = document.getElementById('countNano');
-        const countMedium = document.getElementById('countMedium');
-        const carLightNano = document.getElementById('carLightNano');
-        const carLightTextNano = document.getElementById('carLightTextNano');
-        const pedLightNano = document.getElementById('pedLightNano');
-        const pedLightTextNano = document.getElementById('pedLightTextNano');
-        const carLightMedium = document.getElementById('carLightMedium');
-        const carLightTextMedium = document.getElementById('carLightTextMedium');
-        const pedLightMedium = document.getElementById('pedLightMedium');
-        const pedLightTextMedium = document.getElementById('pedLightTextMedium');
+        const annotated = document.getElementById('annotated');
+        const countValue = document.getElementById('countValue');
+        const carLight = document.getElementById('carLight');
+        const carLightText = document.getElementById('carLightText');
+        const pedLight = document.getElementById('pedLight');
+        const pedLightText = document.getElementById('pedLightText');
         const statusEl = document.getElementById('status');
         const fpsInput = document.getElementById('fps');
         const fpsValue = document.getElementById('fpsValue');
@@ -777,10 +736,11 @@ def index():
         const flipBtn = document.getElementById('flipBtn');
         const thresholdInput = document.getElementById('threshold');
         const applyThresholdBtn = document.getElementById('applyThreshold');
+        const modelSelect = document.getElementById('modelSelect');
+        const applyModelBtn = document.getElementById('applyModel');
 
         const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
-        annotatedNano.src = placeholder;
-        annotatedMedium.src = placeholder;
+        annotated.src = placeholder;
 
         let stream = null;
         let timer = null;
@@ -791,25 +751,23 @@ def index():
             statusEl.textContent = text;
         }
 
-        function updateLight(state, carEl, carTextEl, pedEl, pedTextEl) {
+        function updateLight(state) {
             const carState = state || 'RED';
-            carEl.dataset.light = carState;
-            carTextEl.textContent = carState;
+            carLight.dataset.light = carState;
+            carLightText.textContent = carState;
             const pedState = carState === 'RED' ? 'GREEN' : 'RED';
-            pedEl.dataset.light = pedState;
-            pedTextEl.textContent = pedState;
+            pedLight.dataset.light = pedState;
+            pedLightText.textContent = pedState;
         }
 
         function applyFlip() {
             if (flipped) {
                 video.classList.add('flipped');
-                annotatedNano.classList.add('flipped');
-                annotatedMedium.classList.add('flipped');
+                annotated.classList.add('flipped');
                 flipBtn.textContent = 'Unflip view';
             } else {
                 video.classList.remove('flipped');
-                annotatedNano.classList.remove('flipped');
-                annotatedMedium.classList.remove('flipped');
+                annotated.classList.remove('flipped');
                 flipBtn.textContent = 'Flip view';
             }
         }
@@ -823,6 +781,20 @@ def index():
             }
         }
 
+        function modelLabel(name) {
+            const lower = name.toLowerCase();
+            if (lower.includes('yolov8n')) {
+                return 'Nano';
+            }
+            if (lower.includes('yolov8m')) {
+                return 'Medium';
+            }
+            if (lower.includes('yolov8l')) {
+                return 'Large';
+            }
+            return name;
+        }
+
         async function loadConfig() {
             try {
                 const res = await fetch('/config');
@@ -833,8 +805,41 @@ def index():
                 if (typeof data.threshold === 'number') {
                     thresholdInput.value = data.threshold;
                 }
+                if (Array.isArray(data.models) && data.models.length) {
+                    modelSelect.innerHTML = '';
+                    data.models.forEach((name) => {
+                        const opt = document.createElement('option');
+                        opt.value = name;
+                        opt.textContent = modelLabel(name);
+                        modelSelect.appendChild(opt);
+                    });
+                }
+                if (typeof data.model === 'string') {
+                    modelSelect.value = data.model;
+                }
             } catch (err) {
                 // ignore
+            }
+        }
+
+        async function applyModel() {
+            const selected = modelSelect.value;
+            if (!selected) {
+                return;
+            }
+            try {
+                const res = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: selected })
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || 'Server error');
+                }
+                setStatus('Model updated.');
+            } catch (err) {
+                setStatus('Error: ' + err.message);
             }
         }
 
@@ -925,33 +930,14 @@ def index():
                         throw new Error(text || 'Server error');
                     }
                     const data = await res.json();
-                    if (data.nano) {
-                        if (data.nano.image) {
-                            annotatedNano.src = 'data:image/jpeg;base64,' + data.nano.image;
-                        }
-                        if (typeof data.nano.count === 'number') {
-                            countNano.textContent = data.nano.count;
-                        }
-                        if (data.nano.light) {
-                            updateLight(data.nano.light, carLightNano, carLightTextNano, pedLightNano, pedLightTextNano);
-                        }
+                    if (data.image) {
+                        annotated.src = 'data:image/jpeg;base64,' + data.image;
                     }
-                    if (data.medium) {
-                        if (data.medium.image) {
-                            annotatedMedium.src = 'data:image/jpeg;base64,' + data.medium.image;
-                        }
-                        if (typeof data.medium.count === 'number') {
-                            countMedium.textContent = data.medium.count;
-                        }
-                        if (data.medium.light) {
-                            updateLight(
-                                data.medium.light,
-                                carLightMedium,
-                                carLightTextMedium,
-                                pedLightMedium,
-                                pedLightTextMedium
-                            );
-                        }
+                    if (typeof data.count === 'number') {
+                        countValue.textContent = data.count;
+                    }
+                    if (data.light) {
+                        updateLight(data.light);
                     }
                     setStatus('Last update: ' + new Date().toLocaleTimeString());
                 } catch (err) {
@@ -971,6 +957,8 @@ def index():
         });
         thresholdInput.addEventListener('change', applyThreshold);
         applyThresholdBtn.addEventListener('click', applyThreshold);
+        modelSelect.addEventListener('change', applyModel);
+        applyModelBtn.addEventListener('click', applyModel);
         loadConfig();
     </script>
 </body>
@@ -1023,15 +1011,19 @@ def update_config(cfg: ConfigUpdate):
             CONFIDENCE = max(0.01, min(0.95, float(cfg.conf)))
             state['conf'] = CONFIDENCE
             updates['conf'] = CONFIDENCE
+        if cfg.model is not None:
+            if cfg.model not in ALLOWED_MODELS:
+                raise HTTPException(status_code=400, detail='Unsupported model')
+            state['model'] = cfg.model
+            updates['model'] = cfg.model
+            load_model(cfg.model)
     if 'threshold' in updates or 'yellow_duration' in updates:
         with sessions_lock:
             for session in sessions.values():
                 if 'threshold' in updates:
-                    session.nano_controller.threshold = THRESHOLD
-                    session.medium_controller.threshold = THRESHOLD
+                    session.controller.threshold = THRESHOLD
                 if 'yellow_duration' in updates:
-                    session.nano_controller.yellow_duration = YELLOW_DURATION
-                    session.medium_controller.yellow_duration = YELLOW_DURATION
+                    session.controller.yellow_duration = YELLOW_DURATION
     return {'ok': True, 'updated': updates or cfg.dict()}
 
 
@@ -1042,6 +1034,8 @@ def get_config():
             'threshold': state.get('threshold', THRESHOLD),
             'yellow_duration': state.get('yellow_duration', YELLOW_DURATION),
             'conf': state.get('conf', CONFIDENCE),
+            'model': state.get('model', MODEL_NAME),
+            'models': ALLOWED_MODELS,
             'source': state.get('source', '0'),
         }
 
@@ -1064,35 +1058,21 @@ async def infer(request: Request, response: Response):
     session = get_or_create_session(session_id)
     with state_lock:
         conf = float(state.get('conf', CONFIDENCE))
-    r_nano, nano_count = run_inference_with_conf(frame, MODEL_NANO_NAME, conf)
-    r_medium, medium_count = run_inference_with_conf(frame, MODEL_MEDIUM_NAME, conf)
-    avg_nano, light_nano, avg_medium, light_medium = session.update_dual(nano_count, medium_count)
+        model_name = state.get('model', MODEL_NAME)
+    r, raw_count = run_inference_with_conf(frame, model_name, conf)
+    avg_count, light_state = session.update(raw_count)
 
     try:
-        annotated_nano = r_nano.plot()
-        ret_nano, jpeg_nano = cv2.imencode('.jpg', annotated_nano)
-        image_nano = base64.b64encode(jpeg_nano.tobytes()).decode('ascii') if ret_nano else ''
+        annotated = r.plot()
+        ret, jpeg = cv2.imencode('.jpg', annotated)
+        image_b64 = base64.b64encode(jpeg.tobytes()).decode('ascii') if ret else ''
     except Exception:
-        image_nano = ''
-
-    try:
-        annotated_med = r_medium.plot()
-        ret_med, jpeg_med = cv2.imencode('.jpg', annotated_med)
-        image_med = base64.b64encode(jpeg_med.tobytes()).decode('ascii') if ret_med else ''
-    except Exception:
-        image_med = ''
+        image_b64 = ''
 
     return {
-        'nano': {
-            'count': avg_nano,
-            'light': light_nano,
-            'image': image_nano,
-        },
-        'medium': {
-            'count': avg_medium,
-            'light': light_medium,
-            'image': image_med,
-        },
+        'count': avg_count,
+        'light': light_state,
+        'image': image_b64,
     }
 
 
