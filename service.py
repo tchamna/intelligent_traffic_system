@@ -508,9 +508,9 @@ def index():
         .metric-bottom {
             margin-top: 16px;
             display: flex;
-            align-items: baseline;
-            justify-content: center;
-            gap: 10px;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
             text-align: center;
         }
 
@@ -531,6 +531,9 @@ def index():
             flex-direction: column;
             gap: 4px;
             font-size: 13px;
+            width: 100%;
+            max-width: 150px;
+            z-index: 1;
         }
 
         .count-row {
@@ -543,6 +546,10 @@ def index():
             color: var(--muted);
             text-transform: uppercase;
             letter-spacing: 0.08em;
+        }
+
+        .count-value {
+            font-weight: 600;
         }
 
         .light {
@@ -672,6 +679,22 @@ def index():
                 grid-template-areas:
                     "car media ped"
                     "count count count";
+            }
+        }
+
+        @media (max-width: 520px) {
+            .ai-layout {
+                grid-template-columns: minmax(88px, 1fr) minmax(120px, 1fr) minmax(88px, 1fr);
+            }
+
+            .light {
+                min-width: 88px;
+                padding: 10px;
+            }
+
+            .bulb {
+                width: 46px;
+                height: 46px;
             }
         }
     </style>
