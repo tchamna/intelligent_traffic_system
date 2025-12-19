@@ -13,6 +13,10 @@ Environment:
   PORT_RANGE_START=8001, PORT_RANGE_END=8999 to control auto port range
   DOMAIN_NAME or NGINX_SERVER_NAME to control nginx server_name
   NGINX_SITE_NAME to control /etc/nginx/conf.d/<name>.conf
+  NGINX_DISABLE_CONFLICTS=1 to auto-disable other configs with same server_name
+  ENABLE_CERTBOT=0|1 to request HTTPS certs automatically
+  CERTBOT_EMAIL=you@example.com (required when ENABLE_CERTBOT=1)
+  NGINX_REDIRECT_TO_HTTPS=0|1 to force HTTPS when certbot runs
 """
 
 import argparse
@@ -69,6 +73,8 @@ def git_remote_url():
         ["git", "config", "--get", "remote.origin.url"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         return None
@@ -94,7 +100,13 @@ def ssh(host, user, key_path, cmd):
         f"{user}@{host}",
         cmd,
     ]
-    result = subprocess.run(args, capture_output=True, text=True)
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     return result.returncode == 0, result.stdout, result.stderr
 
 
@@ -137,10 +149,49 @@ PY"""
     return parse_int(out.strip())
 
 
+def get_listen_owner_remote(ec2_host, ec2_user, key_path, port):
+    cmd = (
+        f"owner=$(sudo ss -ltnp 2>/dev/null | awk '$4 ~ /:{port}$/ {{print $6}}' | head -n1); "
+        f"if [ -z \"$owner\" ]; then "
+        f"  owner=$(sudo netstat -ltnp 2>/dev/null | awk '$4 ~ /:{port}$/ {{print $7}}' | head -n1); "
+        f"fi; "
+        f"echo \"$owner\""
+    )
+    ok, out, _ = ssh(ec2_host, ec2_user, key_path, cmd)
+    if not ok:
+        return ""
+    return out.strip()
+
+
+def is_port_used_by_service_remote(ec2_host, ec2_user, key_path, port, service_name):
+    cmd = f"systemctl show -p MainPID --value {service_name} 2>/dev/null || true"
+    ok, out, _ = ssh(ec2_host, ec2_user, key_path, cmd)
+    if not ok:
+        return False
+    pid = out.strip()
+    if not pid or pid == "0":
+        return False
+    owner = get_listen_owner_remote(ec2_host, ec2_user, key_path, port)
+    if not owner:
+        return False
+    if f"pid={pid}" in owner or owner.startswith(f\"{pid}/\"):
+        return True
+    return False
+
+
+def is_port_in_use_remote(ec2_host, ec2_user, key_path, port):
+    owner = get_listen_owner_remote(ec2_host, ec2_user, key_path, port)
+    return bool(owner)
+
+
 def setup_nginx(ec2_host, ec2_user, key_path, app_name, app_port, server_name):
     nginx_site = get_env("NGINX_SITE_NAME") or app_name
     config_path = f"/etc/nginx/conf.d/{nginx_site}.conf"
     server_name = server_name or ec2_host
+    disable_conflicts = get_env("NGINX_DISABLE_CONFLICTS", "1") == "1"
+    enable_certbot = get_env("ENABLE_CERTBOT", "0") == "1"
+    certbot_email = get_env("CERTBOT_EMAIL", "").strip()
+    redirect_https = get_env("NGINX_REDIRECT_TO_HTTPS", "0") == "1"
 
     install_cmd = (
         "if ! command -v nginx >/dev/null 2>&1; then "
@@ -154,10 +205,30 @@ def setup_nginx(ec2_host, ec2_user, key_path, app_name, app_port, server_name):
         print(err.strip() or out.strip())
         sys.exit(1)
 
+    if disable_conflicts and server_name not in ("_", "default_server"):
+        conflict_cmd = (
+            f"set -e; "
+            f"matches=$(sudo grep -RIl \"server_name[[:space:]].*{server_name}\" /etc/nginx/conf.d || true); "
+            f"ts=$(date +%Y%m%d%H%M%S); "
+            f"for f in $matches; do "
+            f"  if [ \"$f\" != \"{config_path}\" ]; then "
+            f"    sudo mv \"$f\" \"${{f}}.bak.${{ts}}\"; "
+            f"  fi; "
+            f"done"
+        )
+        ok, out, err = ssh(ec2_host, ec2_user, key_path, conflict_cmd)
+        if not ok:
+            print(err.strip() or out.strip())
+            sys.exit(1)
+
     nginx_conf = f"""server {{
     listen 80;
     server_name {server_name};
     client_max_body_size 25m;
+
+    location /.well-known/acme-challenge/ {{
+        root /var/www/certbot;
+    }}
 
     location / {{
         proxy_pass http://127.0.0.1:{app_port};
@@ -184,6 +255,37 @@ def setup_nginx(ec2_host, ec2_user, key_path, app_name, app_port, server_name):
         print(err.strip() or out.strip())
         sys.exit(1)
     print(out.strip())
+
+    if enable_certbot:
+        if not certbot_email:
+            print("ERROR: ENABLE_CERTBOT=1 requires CERTBOT_EMAIL.")
+            sys.exit(1)
+        certbot_install = (
+            "if ! command -v certbot >/dev/null 2>&1; then "
+            "if command -v yum >/dev/null 2>&1; then sudo yum install -y certbot python3-certbot-nginx; "
+            "elif command -v apt-get >/dev/null 2>&1; then sudo apt-get update -y && sudo apt-get install -y certbot python3-certbot-nginx; "
+            "else echo 'Certbot not installed and no package manager found.'; exit 1; fi; "
+            "fi"
+        )
+        ok, out, err = ssh(ec2_host, ec2_user, key_path, certbot_install)
+        if not ok:
+            print(err.strip() or out.strip())
+            sys.exit(1)
+
+        redirect_flag = "--redirect" if redirect_https else ""
+        certbot_cmd = (
+            f"sudo certbot --nginx -d {server_name} "
+            f"--non-interactive --agree-tos -m {certbot_email} {redirect_flag}"
+        )
+        ok, out, err = ssh(ec2_host, ec2_user, key_path, certbot_cmd)
+        if not ok:
+            print(err.strip() or out.strip())
+            sys.exit(1)
+        reload_cmd = "sudo nginx -t && sudo systemctl reload nginx"
+        ok, out, err = ssh(ec2_host, ec2_user, key_path, reload_cmd)
+        if not ok:
+            print(err.strip() or out.strip())
+            sys.exit(1)
 
 
 def deploy():
@@ -212,6 +314,7 @@ def deploy():
     min_green = get_env("MIN_GREEN_TIME", "5.0")
     min_red = get_env("MIN_RED_TIME", "3.0")
     hysteresis = get_env("HYSTERESIS", "1")
+    torch_index_url = get_env("TORCH_INDEX_URL", "https://download.pytorch.org/whl/cpu").strip()
 
     key_path, temp_key = resolve_ssh_key(ssh_key_raw)
     if not key_path:
@@ -221,8 +324,20 @@ def deploy():
     app_port = None
     if app_port_raw and app_port_raw not in ("auto", "0"):
         app_port = parse_int(app_port_raw)
+        if app_port is not None:
+            if is_port_in_use_remote(ec2_host, ec2_user, key_path, app_port) and not is_port_used_by_service_remote(
+                ec2_host, ec2_user, key_path, app_port, service_name
+            ):
+                print(f"ERROR: APP_PORT {app_port} is already in use on the EC2 instance.")
+                print("Set APP_PORT=auto (or unset) to allow auto-selection.")
+                sys.exit(1)
     if app_port is None:
         app_port = get_remote_port_from_env(ec2_host, ec2_user, key_path)
+        if app_port is not None:
+            if is_port_in_use_remote(ec2_host, ec2_user, key_path, app_port) and not is_port_used_by_service_remote(
+                ec2_host, ec2_user, key_path, app_port, service_name
+            ):
+                app_port = None
     if app_port is None:
         app_port = find_free_port_remote(ec2_host, ec2_user, key_path, port_range_start, port_range_end)
     if app_port is None:
@@ -253,13 +368,18 @@ def deploy():
             print(err.strip() or out.strip())
             sys.exit(1)
 
+        pip_env = "PIP_NO_CACHE_DIR=1"
+        if torch_index_url:
+            pip_env = f"{pip_env} PIP_EXTRA_INDEX_URL={torch_index_url}"
+
         cmd = (
             f"set -e; "
             f"cd {app_dir}; "
             f"if [ ! -d .venv ]; then python3 -m venv .venv; fi; "
             f". .venv/bin/activate; "
-            f"pip install --upgrade pip; "
-            f"pip install -r requirements.txt"
+            f"rm -rf ~/.cache/pip; "
+            f"{pip_env} pip install --upgrade pip; "
+            f"{pip_env} pip install --prefer-binary -r requirements.txt"
         )
         ok, out, err = ssh(ec2_host, ec2_user, key_path, cmd)
         if not ok:
@@ -331,7 +451,9 @@ WantedBy=multi-user.target
 
 def setup_github_secrets():
     load_env_file(".env")
-    result = subprocess.run(["gh", "--version"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["gh", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if result.returncode != 0:
         print("ERROR: gh CLI not installed or not in PATH.")
         sys.exit(1)
@@ -355,6 +477,10 @@ def setup_github_secrets():
     port_range_end = get_env("PORT_RANGE_END", "")
     nginx_server = get_env("NGINX_SERVER_NAME") or get_env("DOMAIN_NAME") or ""
     nginx_site = get_env("NGINX_SITE_NAME") or ""
+    nginx_disable_conflicts = get_env("NGINX_DISABLE_CONFLICTS", "")
+    enable_certbot = get_env("ENABLE_CERTBOT", "")
+    certbot_email = get_env("CERTBOT_EMAIL", "")
+    nginx_redirect_https = get_env("NGINX_REDIRECT_TO_HTTPS", "")
 
     key_path, temp_key = resolve_ssh_key(ssh_key_raw)
     if key_path and os.path.exists(key_path):
@@ -372,6 +498,10 @@ def setup_github_secrets():
         "EC2_PORT_RANGE_END": port_range_end,
         "NGINX_SERVER_NAME": nginx_server,
         "NGINX_SITE_NAME": nginx_site,
+        "NGINX_DISABLE_CONFLICTS": nginx_disable_conflicts,
+        "ENABLE_CERTBOT": enable_certbot,
+        "CERTBOT_EMAIL": certbot_email,
+        "NGINX_REDIRECT_TO_HTTPS": nginx_redirect_https,
     }
 
     try:
@@ -384,6 +514,8 @@ def setup_github_secrets():
                 input=str(value),
                 text=True,
                 capture_output=True,
+                encoding="utf-8",
+                errors="replace",
             )
             if proc.returncode != 0:
                 print(f"Failed to set {name}: {proc.stderr.strip()}")
@@ -399,7 +531,9 @@ def setup_github_secrets():
 
 
 def trigger_workflow():
-    result = subprocess.run(["gh", "--version"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["gh", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if result.returncode != 0:
         print("ERROR: gh CLI not installed or not in PATH.")
         sys.exit(1)
@@ -407,6 +541,8 @@ def trigger_workflow():
         ["gh", "workflow", "run", "deploy-ec2.yml", "--ref", "main"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if run.returncode != 0:
         print(run.stderr.strip())
@@ -415,11 +551,15 @@ def trigger_workflow():
 
 
 def push_changes():
-    status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if status.stdout.strip():
         print("ERROR: working tree is dirty. Commit or stash before pushing.")
         sys.exit(1)
-    run = subprocess.run(["git", "push", "origin", "main"], capture_output=True, text=True)
+    run = subprocess.run(
+        ["git", "push", "origin", "main"], capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     if run.returncode != 0:
         print(run.stderr.strip())
         sys.exit(1)

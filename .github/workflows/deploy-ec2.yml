@@ -18,6 +18,11 @@ jobs:
       EC2_PORT_RANGE_END: ${{ secrets.EC2_PORT_RANGE_END }}
       NGINX_SERVER_NAME: ${{ secrets.NGINX_SERVER_NAME }}
       NGINX_SITE_NAME: ${{ secrets.NGINX_SITE_NAME }}
+      TORCH_INDEX_URL: ${{ secrets.TORCH_INDEX_URL }}
+      NGINX_DISABLE_CONFLICTS: ${{ secrets.NGINX_DISABLE_CONFLICTS }}
+      ENABLE_CERTBOT: ${{ secrets.ENABLE_CERTBOT }}
+      CERTBOT_EMAIL: ${{ secrets.CERTBOT_EMAIL }}
+      NGINX_REDIRECT_TO_HTTPS: ${{ secrets.NGINX_REDIRECT_TO_HTTPS }}
     steps:
       - name: Deploy over SSH
         shell: bash
@@ -38,10 +43,14 @@ jobs:
           PORT_RANGE_END="${EC2_PORT_RANGE_END:-8999}"
           NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
           NGINX_SITE_NAME="${NGINX_SITE_NAME:-intelligent_traffic_system}"
+          NGINX_DISABLE_CONFLICTS="${NGINX_DISABLE_CONFLICTS:-1}"
+          ENABLE_CERTBOT="${ENABLE_CERTBOT:-0}"
+          CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
+          NGINX_REDIRECT_TO_HTTPS="${NGINX_REDIRECT_TO_HTTPS:-0}"
 
           ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
             "${EC2_USER}@${EC2_HOST}" \
-            "APP_PORT='${APP_PORT}' PORT_RANGE_START='${PORT_RANGE_START}' PORT_RANGE_END='${PORT_RANGE_END}' NGINX_SERVER_NAME='${NGINX_SERVER_NAME}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' bash -s" <<'EOF'
+            "APP_PORT='${APP_PORT}' PORT_RANGE_START='${PORT_RANGE_START}' PORT_RANGE_END='${PORT_RANGE_END}' NGINX_SERVER_NAME='${NGINX_SERVER_NAME}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' NGINX_DISABLE_CONFLICTS='${NGINX_DISABLE_CONFLICTS}' ENABLE_CERTBOT='${ENABLE_CERTBOT}' CERTBOT_EMAIL='${CERTBOT_EMAIL}' NGINX_REDIRECT_TO_HTTPS='${NGINX_REDIRECT_TO_HTTPS}' bash -s" <<'EOF'
           set -euo pipefail
           APP_DIR="$HOME/apps/intelligent_traffic_system"
           REPO_URL="https://github.com/tchamna/intelligent_traffic_system.git"
@@ -51,6 +60,46 @@ jobs:
           PORT_RANGE_END="${PORT_RANGE_END:-8999}"
           NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
           NGINX_SITE_NAME="${NGINX_SITE_NAME:-intelligent_traffic_system}"
+          NGINX_DISABLE_CONFLICTS="${NGINX_DISABLE_CONFLICTS:-1}"
+          ENABLE_CERTBOT="${ENABLE_CERTBOT:-0}"
+          CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
+          NGINX_REDIRECT_TO_HTTPS="${NGINX_REDIRECT_TO_HTTPS:-0}"
+          TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}"
+          PIP_ENV="PIP_NO_CACHE_DIR=1"
+          if [ -n "$TORCH_INDEX_URL" ]; then
+            PIP_ENV="$PIP_ENV PIP_EXTRA_INDEX_URL=$TORCH_INDEX_URL"
+          fi
+
+          port_in_use() {
+            local port="$1"
+            if command -v ss >/dev/null 2>&1; then
+              ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://' | grep -qx "$port"
+              return $?
+            fi
+            if command -v netstat >/dev/null 2>&1; then
+              netstat -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://' | grep -qx "$port"
+              return $?
+            fi
+            return 1
+          }
+
+          port_used_by_its_service() {
+            local port="$1"
+            local pid=""
+            pid="$(systemctl show -p MainPID --value its.service 2>/dev/null || true)"
+            if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+              return 1
+            fi
+            if command -v ss >/dev/null 2>&1; then
+              ss -ltnp 2>/dev/null | awk -v p=":$port" -v pid="pid=$pid" '$0 ~ p && $0 ~ pid {found=1} END {exit !found}'
+              return $?
+            fi
+            if command -v netstat >/dev/null 2>&1; then
+              netstat -ltnp 2>/dev/null | awk -v p=":$port" -v pid="/$pid" '$0 ~ p && $0 ~ pid {found=1} END {exit !found}'
+              return $?
+            fi
+            return 1
+          }
 
           if [ ! -d "$APP_DIR/.git" ]; then
             mkdir -p "$HOME/apps"
@@ -66,26 +115,31 @@ jobs:
             $PYTHON_BIN -m venv .venv
           fi
           . .venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          rm -rf ~/.cache/pip
+          env $PIP_ENV pip install --upgrade pip
+          env $PIP_ENV pip install --prefer-binary -r requirements.txt
           deactivate
 
-          if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
-            if [ -f /etc/its.env ]; then
-              PORT="$(grep -E '^PORT=' /etc/its.env | tail -1 | cut -d= -f2)"
+          if [ -n "$PORT" ] && [ "$PORT" != "auto" ] && [ "$PORT" != "0" ]; then
+            if port_in_use "$PORT" && ! port_used_by_its_service "$PORT"; then
+              echo "APP_PORT=$PORT is already in use by another process."
+              exit 1
             fi
           fi
 
           if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
-            LISTEN_PORTS=""
-            if command -v ss >/dev/null 2>&1; then
-              LISTEN_PORTS="$(ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://')"
-            elif command -v netstat >/dev/null 2>&1; then
-              LISTEN_PORTS="$(netstat -ltn 2>/dev/null | awk 'NR>1 {print $4}' | sed 's/.*://')"
+            if [ -f /etc/its.env ]; then
+              PORT="$(grep -E '^PORT=' /etc/its.env | tail -1 | cut -d= -f2)"
+              if [ -n "$PORT" ] && port_in_use "$PORT" && ! port_used_by_its_service "$PORT"; then
+                echo "Port $PORT from /etc/its.env is in use by another process. Selecting a free port."
+                PORT=""
+              fi
             fi
+          fi
 
+          if [ -z "$PORT" ] || [ "$PORT" = "auto" ] || [ "$PORT" = "0" ]; then
             for p in $(seq "$PORT_RANGE_START" "$PORT_RANGE_END"); do
-              if echo "$LISTEN_PORTS" | grep -qx "$p"; then
+              if port_in_use "$p"; then
                 continue
               fi
               PORT="$p"
@@ -142,11 +196,26 @@ jobs:
             fi
           fi
 
+          if [ "$NGINX_DISABLE_CONFLICTS" = "1" ] && [ "$NGINX_SERVER_NAME" != "_" ]; then
+            matches="$(sudo grep -RIl "server_name[[:space:]].*${NGINX_SERVER_NAME}" /etc/nginx/conf.d || true)"
+            ts="$(date +%Y%m%d%H%M%S)"
+            for f in $matches; do
+              if [ "$f" != "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" ]; then
+                sudo mv "$f" "${f}.bak.${ts}"
+              fi
+            done
+          fi
+
+          sudo mkdir -p /var/www/certbot
           sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<EOF
           server {
               listen 80;
               server_name ${NGINX_SERVER_NAME};
               client_max_body_size 25m;
+
+              location /.well-known/acme-challenge/ {
+                  root /var/www/certbot;
+              }
 
               location / {
                   proxy_pass http://127.0.0.1:${PORT};
@@ -164,6 +233,32 @@ jobs:
           sudo systemctl enable nginx
           sudo systemctl restart nginx
           sudo systemctl status nginx --no-pager -l
+
+          if [ "$ENABLE_CERTBOT" = "1" ]; then
+            if [ -z "$CERTBOT_EMAIL" ] || [ "$NGINX_SERVER_NAME" = "_" ]; then
+              echo "ENABLE_CERTBOT=1 requires CERTBOT_EMAIL and a real server name."
+              exit 1
+            fi
+            if ! command -v certbot >/dev/null 2>&1; then
+              if command -v yum >/dev/null 2>&1; then
+                sudo yum install -y certbot python3-certbot-nginx
+              elif command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -y
+                sudo apt-get install -y certbot python3-certbot-nginx
+              else
+                echo "Certbot not installed and no package manager found."
+                exit 1
+              fi
+            fi
+
+            REDIRECT_FLAG=""
+            if [ "$NGINX_REDIRECT_TO_HTTPS" = "1" ]; then
+              REDIRECT_FLAG="--redirect"
+            fi
+            sudo certbot --nginx -d "$NGINX_SERVER_NAME" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" $REDIRECT_FLAG
+            sudo nginx -t
+            sudo systemctl reload nginx
+          fi
 
           echo "Deployed: http://${NGINX_SERVER_NAME}/"
           echo "Direct port: ${PORT}"
