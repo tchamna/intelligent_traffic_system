@@ -205,6 +205,9 @@ jobs:
             ts="$(date +%Y%m%d%H%M%S)"
             for f in $matches; do
               if [ -f "$f" ] && [ "$f" != "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" ]; then
+                case "$f" in
+                  *.bak.*) continue ;;
+                esac
                 sudo mv "$f" "${f}.bak.${ts}"
               fi
             done
