@@ -23,7 +23,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          port: ${{ secrets.EC2_SSH_PORT || 22 }}
+          port: ${{ secrets.EC2_SSH_PORT }}
           envs: APP_PORT,PORT_RANGE_START,PORT_RANGE_END,NGINX_SERVER_NAME,NGINX_SITE_NAME,REPO_URL
           script: |
             set -euo pipefail
