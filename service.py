@@ -281,7 +281,8 @@ def detection_loop(source: str = '0', conf: float = 0.35, threshold: int = 5, ye
 
 @app.on_event('startup')
 def startup_event():
-    load_model()
+    load_model(MODEL_NANO_NAME)
+    load_model(MODEL_MEDIUM_NAME)
     if SERVER_CAPTURE:
         src = os.environ.get('SOURCE', '0')
         conf = float(os.environ.get('CONF', 0.35))
