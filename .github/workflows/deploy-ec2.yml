@@ -50,7 +50,7 @@ jobs:
 
           ssh -p "$SSH_PORT" -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa \
             "${EC2_USER}@${EC2_HOST}" \
-            "APP_PORT='${APP_PORT}' PORT_RANGE_START='${PORT_RANGE_START}' PORT_RANGE_END='${PORT_RANGE_END}' NGINX_SERVER_NAME='${NGINX_SERVER_NAME}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' NGINX_DISABLE_CONFLICTS='${NGINX_DISABLE_CONFLICTS}' ENABLE_CERTBOT='${ENABLE_CERTBOT}' CERTBOT_EMAIL='${CERTBOT_EMAIL}' NGINX_REDIRECT_TO_HTTPS='${NGINX_REDIRECT_TO_HTTPS}' bash -s" <<'EOF'
+            "APP_PORT='${APP_PORT}' PORT_RANGE_START='${PORT_RANGE_START}' PORT_RANGE_END='${PORT_RANGE_END}' NGINX_SERVER_NAME='${NGINX_SERVER_NAME}' NGINX_SITE_NAME='${NGINX_SITE_NAME}' NGINX_DISABLE_CONFLICTS='${NGINX_DISABLE_CONFLICTS}' ENABLE_CERTBOT='${ENABLE_CERTBOT}' CERTBOT_EMAIL='${CERTBOT_EMAIL}' NGINX_REDIRECT_TO_HTTPS='${NGINX_REDIRECT_TO_HTTPS}' bash -s" <<'REMOTE_EOF'
           set -euo pipefail
           APP_DIR="$HOME/apps/intelligent_traffic_system"
           REPO_URL="https://github.com/tchamna/intelligent_traffic_system.git"
@@ -152,16 +152,16 @@ jobs:
             exit 1
           fi
 
-          sudo tee /etc/its.env >/dev/null <<EOF
+          sudo tee /etc/its.env >/dev/null <<'ITS_ENV'
           PORT=$PORT
           MODEL=yolov8n.pt
           CONF=0.35
           THRESHOLD=5
           YELLOW_DURATION=3.0
           SMOOTHING_WINDOW=2.0
-          EOF
+          ITS_ENV
 
-          sudo tee /etc/systemd/system/its.service >/dev/null <<'EOF'
+          sudo tee /etc/systemd/system/its.service >/dev/null <<'ITS_SERVICE'
           [Unit]
           Description=Intelligent Traffic System
           After=network.target
@@ -177,7 +177,7 @@ jobs:
 
           [Install]
           WantedBy=multi-user.target
-          EOF
+          ITS_SERVICE
 
           sudo systemctl daemon-reload
           sudo systemctl enable its.service
@@ -207,7 +207,7 @@ jobs:
           fi
 
           sudo mkdir -p /var/www/certbot
-          sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<EOF
+          sudo tee "/etc/nginx/conf.d/${NGINX_SITE_NAME}.conf" >/dev/null <<'NGINX_CONF'
           server {
               listen 80;
               server_name ${NGINX_SERVER_NAME};
@@ -227,7 +227,7 @@ jobs:
                   proxy_read_timeout 120s;
               }
           }
-          EOF
+          NGINX_CONF
 
           sudo nginx -t
           sudo systemctl enable nginx
@@ -262,4 +262,4 @@ jobs:
 
           echo "Deployed: http://${NGINX_SERVER_NAME}/"
           echo "Direct port: ${PORT}"
-          EOF
+          REMOTE_EOF
