@@ -288,7 +288,7 @@ def index():
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Traffic Light Vehicle Counter</title>
+    <title>Intelligent Traffic System</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -367,7 +367,8 @@ def index():
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            grid-template-columns: minmax(0, 980px);
+            justify-content: center;
             gap: 18px;
             margin-bottom: 18px;
         }
@@ -417,6 +418,32 @@ def index():
             align-items: center;
         }
 
+        .ai-layout {
+            display: grid;
+            gap: 16px;
+            align-items: center;
+            grid-template-columns: repeat(3, minmax(90px, 1fr));
+            grid-template-areas:
+                "media media media"
+                "car count ped";
+        }
+
+        .ai-layout .media {
+            grid-area: media;
+        }
+
+        .ai-layout .car-light {
+            grid-area: car;
+        }
+
+        .ai-layout .ped-light {
+            grid-area: ped;
+        }
+
+        .ai-layout .count-pill {
+            grid-area: count;
+        }
+
         .lights {
             display: grid;
             grid-template-columns: repeat(2, minmax(90px, 1fr));
@@ -453,6 +480,27 @@ def index():
 
         .metric .value {
             font-size: 36px;
+            font-weight: 600;
+        }
+
+        .metric-bottom {
+            margin-top: 16px;
+            display: flex;
+            align-items: baseline;
+            justify-content: center;
+            gap: 10px;
+            text-align: center;
+        }
+
+        .metric-bottom .label {
+            font-size: 13px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .metric-bottom .value {
+            font-size: 34px;
             font-weight: 600;
         }
 
@@ -576,6 +624,15 @@ def index():
                 align-items: flex-start;
             }
         }
+
+        @media (min-width: 900px) {
+            .ai-layout {
+                grid-template-columns: minmax(120px, 160px) minmax(0, 1fr) minmax(120px, 160px);
+                grid-template-areas:
+                    "car media ped"
+                    "count count count";
+            }
+        }
     </style>
 </head>
 <body>
@@ -583,39 +640,37 @@ def index():
     <div class="bg-blob two"></div>
     <main class="app">
         <header>
-            <h1>Traffic Light Vehicle Counter</h1>
+            <h1>Intelligent Traffic System</h1>
             <p>Allow camera access to feed the model. Only the AI output is shown below.</p>
         </header>
         <section class="grid">
             <div class="card">
                 <h2>AI View</h2>
-                <div class="media">
-                    <img id="annotated" alt="Annotated detections" />
-                </div>
-                <div class="stats">
-                    <div class="metric">
+                <div class="ai-layout">
+                    <div class="light-card car-light">
+                        <div class="light-title">Car</div>
+                        <div class="light" id="carLight" data-light="RED">
+                            <div class="bulb red"></div>
+                            <div class="bulb yellow"></div>
+                            <div class="bulb green"></div>
+                            <div class="light-label" id="carLightText">RED</div>
+                        </div>
+                    </div>
+                    <div class="media">
+                        <img id="annotated" alt="Annotated detections" />
+                    </div>
+                    <div class="light-card ped-light">
+                        <div class="light-title">Pedestrian</div>
+                        <div class="light" id="pedLight" data-light="GREEN">
+                            <div class="bulb red"></div>
+                            <div class="bulb yellow"></div>
+                            <div class="bulb green"></div>
+                            <div class="light-label" id="pedLightText">GREEN</div>
+                        </div>
+                    </div>
+                    <div class="metric-bottom count-pill">
                         <div class="label">Vehicles</div>
                         <div class="value" id="countValue">0</div>
-                    </div>
-                    <div class="lights">
-                        <div class="light-card">
-                            <div class="light-title">Car</div>
-                            <div class="light" id="carLight" data-light="RED">
-                                <div class="bulb red"></div>
-                                <div class="bulb yellow"></div>
-                                <div class="bulb green"></div>
-                                <div class="light-label" id="carLightText">RED</div>
-                            </div>
-                        </div>
-                        <div class="light-card">
-                            <div class="light-title">Pedestrian</div>
-                            <div class="light" id="pedLight" data-light="GREEN">
-                                <div class="bulb red"></div>
-                                <div class="bulb yellow"></div>
-                                <div class="bulb green"></div>
-                                <div class="light-label" id="pedLightText">GREEN</div>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -628,6 +683,11 @@ def index():
                 <label for="fps">Send rate</label>
                 <input id="fps" type="range" min="1" max="6" value="4" />
                 <span id="fpsValue">4 fps</span>
+            </div>
+            <div class="control">
+                <label for="threshold">Threshold</label>
+                <input id="threshold" type="number" min="0" step="1" value="5" />
+                <button id="applyThreshold" class="secondary" type="button">Apply</button>
             </div>
         </section>
         <div class="status" id="status">Idle. Click "Start detection" to begin.</div>
@@ -650,6 +710,8 @@ def index():
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const flipBtn = document.getElementById('flipBtn');
+        const thresholdInput = document.getElementById('threshold');
+        const applyThresholdBtn = document.getElementById('applyThreshold');
 
         const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
         annotated.src = placeholder;
@@ -690,6 +752,44 @@ def index():
             if (timer) {
                 clearInterval(timer);
                 timer = setInterval(captureAndSend, 1000 / Math.max(fps, 1));
+            }
+        }
+
+        async function loadConfig() {
+            try {
+                const res = await fetch('/config');
+                if (!res.ok) {
+                    return;
+                }
+                const data = await res.json();
+                if (typeof data.threshold === 'number') {
+                    thresholdInput.value = data.threshold;
+                }
+            } catch (err) {
+                // ignore
+            }
+        }
+
+        async function applyThreshold() {
+            const raw = Number(thresholdInput.value);
+            if (!Number.isFinite(raw) || raw < 0) {
+                setStatus('Threshold must be 0 or higher.');
+                return;
+            }
+            const payload = { threshold: Math.round(raw) };
+            try {
+                const res = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    const text = await res.text();
+                    throw new Error(text || 'Server error');
+                }
+                setStatus('Threshold updated.');
+            } catch (err) {
+                setStatus('Error: ' + err.message);
             }
         }
 
@@ -782,6 +882,9 @@ def index():
             flipped = !flipped;
             applyFlip();
         });
+        thresholdInput.addEventListener('change', applyThreshold);
+        applyThresholdBtn.addEventListener('click', applyThreshold);
+        loadConfig();
     </script>
 </body>
 </html>
@@ -837,6 +940,16 @@ def update_config(cfg: ConfigUpdate):
                 if 'yellow_duration' in updates:
                     session.controller.yellow_duration = YELLOW_DURATION
     return {'ok': True, 'updated': updates or cfg.dict()}
+
+
+@app.get('/config')
+def get_config():
+    with state_lock:
+        return {
+            'threshold': state.get('threshold', THRESHOLD),
+            'yellow_duration': state.get('yellow_duration', YELLOW_DURATION),
+            'source': state.get('source', '0'),
+        }
 
 
 @app.post('/infer')
