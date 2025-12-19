@@ -4,7 +4,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from typing import Dict
+from typing import Dict, Optional
 
 import cv2
 import numpy as np
@@ -17,9 +17,9 @@ from app import TrafficLightController
 
 
 class ConfigUpdate(BaseModel):
-    threshold: int | None = None
-    yellow_duration: float | None = None
-    source: str | None = None
+    threshold: Optional[int] = None
+    yellow_duration: Optional[float] = None
+    source: Optional[str] = None
 
 
 MODEL_NAME = os.environ.get('MODEL', 'yolov8n.pt')
