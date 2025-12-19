@@ -1004,6 +1004,10 @@ def index():
                     }
                     if (data.counts) {
                         updateCounts(data.counts);
+                    } else if (typeof data.count === 'number' && data.model) {
+                        const fallback = {};
+                        fallback[data.model] = data.count;
+                        updateCounts(fallback);
                     }
                     if (data.light) {
                         updateLight(data.light);
