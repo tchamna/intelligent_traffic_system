@@ -152,7 +152,7 @@ jobs:
             exit 1
           fi
 
-          sudo tee /etc/its.env >/dev/null <<'ITS_ENV'
+          sudo tee /etc/its.env >/dev/null <<ITS_ENV
           PORT=$PORT
           MODEL=yolov8n.pt
           CONF=0.35
