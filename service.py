@@ -46,6 +46,8 @@ state: Dict = {
     'running': False,
     'frame': None,  # latest JPEG bytes
     'source': '0',
+    'threshold': THRESHOLD,
+    'yellow_duration': YELLOW_DURATION,
 }
 state_lock = threading.Lock()
 
@@ -186,11 +188,15 @@ def detection_loop(source: str = '0', conf: float = 0.35, threshold: int = 5, ye
 
     with state_lock:
         state['running'] = True
+        state['threshold'] = int(threshold)
+        state['yellow_duration'] = float(yellow_duration)
 
     current_source = source
     while True:
         with state_lock:
             desired_source = state.get('source', source)
+            desired_threshold = state.get('threshold', threshold)
+            desired_yellow = state.get('yellow_duration', yellow_duration)
         if desired_source != current_source:
             if cap:
                 try:
@@ -203,6 +209,10 @@ def detection_loop(source: str = '0', conf: float = 0.35, threshold: int = 5, ye
                 current_source = desired_source
             else:
                 print('Failed to open new source:', desired_source)
+        if desired_threshold != controller.threshold:
+            controller.threshold = int(desired_threshold)
+        if desired_yellow != controller.yellow_duration:
+            controller.yellow_duration = float(desired_yellow)
 
         if cap is None:
             time.sleep(0.5)
@@ -794,10 +804,28 @@ def stream():
 
 @app.post('/config')
 def update_config(cfg: ConfigUpdate):
+    updates = {}
+    global THRESHOLD, YELLOW_DURATION
     with state_lock:
         if cfg.source is not None:
             state['source'] = cfg.source
-    return {'ok': True, 'updated': cfg.dict()}
+            updates['source'] = cfg.source
+        if cfg.threshold is not None:
+            THRESHOLD = max(0, int(cfg.threshold))
+            state['threshold'] = THRESHOLD
+            updates['threshold'] = THRESHOLD
+        if cfg.yellow_duration is not None:
+            YELLOW_DURATION = max(0.0, float(cfg.yellow_duration))
+            state['yellow_duration'] = YELLOW_DURATION
+            updates['yellow_duration'] = YELLOW_DURATION
+    if 'threshold' in updates or 'yellow_duration' in updates:
+        with sessions_lock:
+            for session in sessions.values():
+                if 'threshold' in updates:
+                    session.controller.threshold = THRESHOLD
+                if 'yellow_duration' in updates:
+                    session.controller.yellow_duration = YELLOW_DURATION
+    return {'ok': True, 'updated': updates or cfg.dict()}
 
 
 @app.post('/infer')
