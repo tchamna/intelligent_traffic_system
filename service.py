@@ -300,6 +300,8 @@ def get_status():
             'last_seen': state['last_seen'],
             'running': state['running'],
             'source': state['source'],
+            'model': state.get('model', MODEL_NAME),
+            'threshold': state.get('threshold', THRESHOLD),
         }
 
 
@@ -743,6 +745,7 @@ def index():
             <button id="startBtn">Start detection</button>
             <button id="stopBtn" class="secondary" disabled>Stop</button>
             <button id="flipBtn" class="secondary">Flip view</button>
+            <button id="switchBtn" class="secondary">Switch camera</button>
             <div class="control">
                 <label for="fps">Send rate</label>
                 <input id="fps" type="range" min="1" max="6" value="4" />
@@ -765,6 +768,7 @@ def index():
             </div>
         </section>
         <div class="status" id="status">Idle. Click "Start detection" to begin.</div>
+        <div class="hint" id="logicNote"></div>
         <div class="hint">Camera access requires HTTPS (or localhost). For sharing on the internet, use a tunnel that provides HTTPS.</div>
     </main>
     <canvas id="capture" class="hidden"></canvas>
@@ -779,11 +783,13 @@ def index():
         const pedLight = document.getElementById('pedLight');
         const pedLightText = document.getElementById('pedLightText');
         const statusEl = document.getElementById('status');
+        const logicNote = document.getElementById('logicNote');
         const fpsInput = document.getElementById('fps');
         const fpsValue = document.getElementById('fpsValue');
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const flipBtn = document.getElementById('flipBtn');
+        const switchBtn = document.getElementById('switchBtn');
         const thresholdInput = document.getElementById('threshold');
         const applyThresholdBtn = document.getElementById('applyThreshold');
         const thresholdValue = document.getElementById('thresholdValue');
@@ -799,6 +805,7 @@ def index():
         let timer = null;
         let busy = false;
         let flipped = false;
+        let facingMode = 'environment';
 
         function setStatus(text) {
             statusEl.textContent = text;
@@ -825,6 +832,14 @@ def index():
             }
         }
 
+        async function restartCamera() {
+            if (stream) {
+                stream.getTracks().forEach((track) => track.stop());
+                stream = null;
+            }
+            await startCamera();
+        }
+
         function updateInterval() {
             const fps = Number(fpsInput.value || 4);
             fpsValue.textContent = fps + ' fps';
@@ -836,6 +851,15 @@ def index():
 
         function updateThresholdDisplay() {
             thresholdValue.textContent = thresholdInput.value;
+        }
+
+        function updateLogicNote() {
+            const value = Number(thresholdInput.value || 0);
+            const threshold = Number.isFinite(value) ? value : 0;
+            logicNote.textContent =
+                'Need at least ' + threshold +
+                ' vehicles for the car light to switch green. If there are fewer than ' +
+                threshold + ' vehicles, pedestrians can cross.';
         }
 
         function modelLabel(name) {
@@ -892,6 +916,13 @@ def index():
                     return;
                 }
                 const data = await res.json();
+                if (data.server_capture) {
+                    startBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    annotated.src = '/stream';
+                    setStatus('Server capture mode. Watching stream...');
+                    pollStatus();
+                }
                 if (typeof data.threshold === 'number') {
                     thresholdInput.value = data.threshold;
                     thresholdValue.textContent = data.threshold;
@@ -964,7 +995,7 @@ def index():
             }
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: { ideal: 'environment' } },
+                    video: { facingMode: { ideal: facingMode } },
                     audio: false
                 });
                 video.srcObject = stream;
@@ -1035,7 +1066,15 @@ def index():
                     if (data.light) {
                         updateLight(data.light);
                     }
-                    setStatus('Last update: ' + new Date().toLocaleTimeString());
+                    const meta = [];
+                    if (data.light) {
+                        meta.push('Light: ' + data.light);
+                    }
+                    if (typeof data.selected_count === 'number' && typeof data.threshold === 'number' && data.model) {
+                        meta.push(modelLabel(data.model) + ': ' + data.selected_count + '/' + data.threshold);
+                    }
+                    const prefix = meta.length ? meta.join(' | ') + ' | ' : '';
+                    setStatus(prefix + 'Last update: ' + new Date().toLocaleTimeString());
                 } catch (err) {
                     setStatus('Error: ' + err.message);
                 } finally {
@@ -1044,19 +1083,66 @@ def index():
             }, 'image/jpeg', 0.7);
         }
 
+        let statusTimer = null;
+        async function pollStatus() {
+            if (statusTimer) {
+                return;
+            }
+            statusTimer = setInterval(async () => {
+                try {
+                    const res = await fetch('/status');
+                    if (!res.ok) {
+                        return;
+                    }
+                    const data = await res.json();
+                    if (data.light) {
+                        updateLight(data.light);
+                    }
+                    if (typeof data.count === 'number' && data.model) {
+                        const fallback = {};
+                        fallback[data.model] = data.count;
+                        updateCounts(fallback);
+                    }
+                    const meta = [];
+                    if (data.light) {
+                        meta.push('Light: ' + data.light);
+                    }
+                    if (typeof data.count === 'number' && typeof data.threshold === 'number' && data.model) {
+                        meta.push(modelLabel(data.model) + ': ' + data.count + '/' + data.threshold);
+                    }
+                    const prefix = meta.length ? meta.join(' | ') + ' | ' : '';
+                    setStatus(prefix + 'Last update: ' + new Date().toLocaleTimeString());
+                } catch (err) {
+                    // ignore
+                }
+            }, 600);
+        }
+
         fpsInput.addEventListener('input', updateInterval);
-        thresholdInput.addEventListener('input', updateThresholdDisplay);
+        thresholdInput.addEventListener('input', () => {
+            updateThresholdDisplay();
+            updateLogicNote();
+        });
         startBtn.addEventListener('click', startCamera);
         stopBtn.addEventListener('click', stopCamera);
         flipBtn.addEventListener('click', () => {
             flipped = !flipped;
             applyFlip();
         });
+        switchBtn.addEventListener('click', async () => {
+            facingMode = facingMode === 'environment' ? 'user' : 'environment';
+            if (stream) {
+                setStatus('Switching camera...');
+                await restartCamera();
+                setStatus('Camera active. Running detection...');
+            }
+        });
         thresholdInput.addEventListener('change', applyThreshold);
         applyThresholdBtn.addEventListener('click', applyThreshold);
         modelSelect.addEventListener('change', applyModel);
         applyModelBtn.addEventListener('click', applyModel);
         loadConfig();
+        updateLogicNote();
     </script>
 </body>
 </html>
@@ -1139,6 +1225,7 @@ def get_config():
             'model': state.get('model', MODEL_NAME),
             'models': ALLOWED_MODELS,
             'source': state.get('source', '0'),
+            'server_capture': SERVER_CAPTURE,
         }
 
 
@@ -1182,6 +1269,8 @@ async def infer(request: Request, response: Response):
     return {
         'counts': avg_counts,
         'model': model_name,
+        'selected_count': session.last_count,
+        'threshold': session.controller.threshold,
         'light': light_state,
         'image': image_b64,
     }
