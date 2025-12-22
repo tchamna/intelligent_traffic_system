@@ -316,17 +316,17 @@ def index():
     <title>Intelligent Traffic System</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600&display=swap" rel="stylesheet" />
     <style>
         :root {
-            --bg1: #f7f1e4;
-            --bg2: #d9efe8;
+            --bg: #f3f4f6;
             --panel: #ffffff;
-            --ink: #1b1b16;
-            --muted: #5d5d57;
-            --accent: #ff6b35;
-            --accent-2: #0a6b6f;
-            --shadow: rgba(15, 15, 15, 0.12);
+            --ink: #111827;
+            --muted: #6b7280;
+            --accent: #0ea5e9;
+            --accent-2: #16a34a;
+            --danger: #ef4444;
+            --shadow: rgba(15, 23, 42, 0.08);
         }
 
         * {
@@ -335,11 +335,11 @@ def index():
 
         body {
             margin: 0;
-            font-family: "Space Grotesk", sans-serif;
+            font-family: "Sora", sans-serif;
             color: var(--ink);
-            background: radial-gradient(circle at 15% 15%, #fff6d8 0, transparent 55%),
-                radial-gradient(circle at 90% 20%, #cfe9ff 0, transparent 45%),
-                linear-gradient(120deg, var(--bg1), var(--bg2));
+            background: radial-gradient(circle at 20% 10%, #ffffff 0, transparent 45%),
+                radial-gradient(circle at 85% 20%, #e0f2fe 0, transparent 50%),
+                linear-gradient(180deg, #f8fafc, var(--bg));
             min-height: 100vh;
         }
 
@@ -354,13 +354,13 @@ def index():
         }
 
         .bg-blob.one {
-            background: #ffd9b8;
+            background: #e2e8f0;
             top: -140px;
             left: -120px;
         }
 
         .bg-blob.two {
-            background: #b9f0da;
+            background: #e0f2fe;
             bottom: -160px;
             right: -140px;
         }
@@ -410,16 +410,17 @@ def index():
         .card h2 {
             margin: 0;
             font-size: 18px;
-            color: var(--accent-2);
+            color: var(--ink);
         }
 
         .media {
             position: relative;
             border-radius: 14px;
             overflow: hidden;
-            background: #0b0b0b;
-            border: 1px solid rgba(0, 0, 0, 0.08);
+            background: #0f172a;
+            border: 1px solid rgba(15, 23, 42, 0.12);
             min-height: 220px;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
         }
 
         video,
@@ -431,8 +432,60 @@ def index():
             aspect-ratio: 16 / 9;
         }
 
-        .flipped {
-            transform: scaleX(-1);
+        .media.is-live {
+            outline: 2px solid rgba(14, 165, 233, 0.4);
+            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+        }
+
+        .media.is-processing {
+            animation: live-glow 1.2s ease-in-out infinite;
+        }
+
+        .media-placeholder {
+            position: absolute;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            text-align: center;
+            color: #e2e8f0;
+            font-size: 14px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            background: radial-gradient(circle at 50% 30%, rgba(148, 163, 184, 0.25), transparent 55%);
+        }
+
+        .media-placeholder.hidden {
+            display: none;
+        }
+
+        .live-badge {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.72);
+            color: #f8fafc;
+            font-size: 11px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .live-badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.8);
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+
+        .live-badge.hidden {
+            display: none;
         }
 
         .stats {
@@ -576,16 +629,19 @@ def index():
         .light[data-light="RED"] .bulb.red {
             background: #ff4d3a;
             box-shadow: 0 0 18px rgba(255, 77, 58, 0.7);
+            animation: glow-red 1.8s ease-in-out infinite;
         }
 
         .light[data-light="YELLOW"] .bulb.yellow {
             background: #ffd24a;
             box-shadow: 0 0 18px rgba(255, 210, 74, 0.7);
+            animation: glow-yellow 1.8s ease-in-out infinite;
         }
 
         .light[data-light="GREEN"] .bulb.green {
             background: #46e07a;
             box-shadow: 0 0 18px rgba(70, 224, 122, 0.7);
+            animation: glow-green 1.8s ease-in-out infinite;
         }
 
         .light-label {
@@ -606,22 +662,53 @@ def index():
             box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
         }
 
+        .menu {
+            border: none;
+        }
+
+        .menu summary {
+            list-style: none;
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--ink);
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+            transition: transform 0.2s ease, filter 0.2s ease;
+        }
+
+        .menu summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .menu[open] summary {
+            transform: translateY(-1px);
+            filter: brightness(1.02);
+        }
+
+        .menu-body {
+            margin-top: 10px;
+            display: grid;
+            gap: 12px;
+        }
+
         button {
             border: none;
             padding: 10px 16px;
             border-radius: 999px;
-            background: var(--accent);
-            color: #1d1d1b;
+            background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+            color: #0f172a;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            box-shadow: 0 10px 20px rgba(255, 107, 53, 0.3);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+            box-shadow: 0 12px 24px rgba(14, 165, 233, 0.25);
         }
 
         button.secondary {
-            background: #e7f0ef;
-            color: var(--ink);
-            box-shadow: none;
+            background: #e2e8f0;
+            color: #0f172a;
+            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
         }
 
         button:disabled {
@@ -631,6 +718,7 @@ def index():
 
         button:not(:disabled):hover {
             transform: translateY(-1px);
+            filter: brightness(1.02);
         }
 
         .control {
@@ -656,6 +744,28 @@ def index():
 
         .hidden {
             display: none;
+        }
+
+        .toast {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            background: rgba(15, 23, 42, 0.95);
+            color: #f8fafc;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            letter-spacing: 0.01em;
+            box-shadow: 0 16px 30px rgba(15, 23, 42, 0.25);
+            z-index: 20;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
         }
 
         .ghost {
@@ -699,6 +809,69 @@ def index():
                 height: 46px;
             }
         }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+            50% {
+                transform: scale(1.2);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+        }
+
+        @keyframes live-glow {
+            0% {
+                box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
+            }
+            50% {
+                box-shadow: 0 0 0 6px rgba(14, 165, 233, 0.2);
+            }
+            100% {
+                box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.15);
+            }
+        }
+
+        @keyframes glow-red {
+            0% {
+                box-shadow: 0 0 12px rgba(255, 77, 58, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 22px rgba(255, 77, 58, 0.8);
+            }
+            100% {
+                box-shadow: 0 0 12px rgba(255, 77, 58, 0.4);
+            }
+        }
+
+        @keyframes glow-yellow {
+            0% {
+                box-shadow: 0 0 12px rgba(255, 210, 74, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 22px rgba(255, 210, 74, 0.8);
+            }
+            100% {
+                box-shadow: 0 0 12px rgba(255, 210, 74, 0.4);
+            }
+        }
+
+        @keyframes glow-green {
+            0% {
+                box-shadow: 0 0 12px rgba(70, 224, 122, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 22px rgba(70, 224, 122, 0.8);
+            }
+            100% {
+                box-shadow: 0 0 12px rgba(70, 224, 122, 0.4);
+            }
+        }
     </style>
 </head>
 <body>
@@ -722,8 +895,10 @@ def index():
                             <div class="light-label" id="carLightText">RED</div>
                         </div>
                     </div>
-                    <div class="media">
+                    <div class="media" id="mediaBox">
                         <img id="annotated" alt="Annotated detections" />
+                        <div class="media-placeholder" id="mediaPlaceholder">Camera idle. Press Start detection.</div>
+                        <div class="live-badge hidden" id="liveBadge"><span class="dot"></span> Live</div>
                     </div>
                     <div class="light-card ped-light">
                         <div class="light-title">Pedestrian</div>
@@ -742,30 +917,31 @@ def index():
             </div>
         </section>
         <section class="controls">
-            <button id="startBtn">Start detection</button>
-            <button id="stopBtn" class="secondary" disabled>Stop</button>
-            <button id="flipBtn" class="secondary">Flip view</button>
-            <button id="switchBtn" class="secondary">Switch camera</button>
-            <div class="control">
-                <label for="fps">Send rate</label>
-                <input id="fps" type="range" min="1" max="6" value="4" />
-                <span id="fpsValue">4 fps</span>
-            </div>
-            <div class="control">
-                <label for="threshold">Threshold</label>
-                <input id="threshold" type="range" min="0" max="20" step="1" value="5" />
-                <span id="thresholdValue">5</span>
-                <button id="applyThreshold" class="secondary" type="button">Apply</button>
-            </div>
-            <div class="control">
-                <label for="modelSelect">Model</label>
-                <select id="modelSelect">
-                    <option value="yolov8n.pt">Nano</option>
-                    <option value="yolov8m.pt">Medium</option>
-                    <option value="yolov8l.pt" selected>Large</option>
-                </select>
-                <button id="applyModel" class="secondary" type="button">Load</button>
-            </div>
+            <button id="toggleBtn">Start detection</button>
+            <details class="menu">
+                <summary>Settings</summary>
+                <div class="menu-body">
+                    <button id="switchBtn" class="secondary" type="button">Switch camera</button>
+                    <div class="control">
+                        <label for="fps">Send rate (fps)</label>
+                        <input id="fps" type="range" min="1" max="6" value="4" />
+                        <span id="fpsValue">4 fps</span>
+                    </div>
+                    <div class="control">
+                        <label for="threshold">Threshold (vehicles)</label>
+                        <input id="threshold" type="range" min="0" max="20" step="1" value="5" />
+                        <span id="thresholdValue">5</span>
+                    </div>
+                    <div class="control">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect">
+                            <option value="yolov8n.pt">Nano</option>
+                            <option value="yolov8m.pt">Medium</option>
+                            <option value="yolov8l.pt" selected>Large</option>
+                        </select>
+                    </div>
+                </div>
+            </details>
         </section>
         <div class="status" id="status">Idle. Click "Start detection" to begin.</div>
         <div class="hint" id="logicNote"></div>
@@ -773,39 +949,41 @@ def index():
     </main>
     <canvas id="capture" class="hidden"></canvas>
     <video id="camera" autoplay playsinline muted class="ghost"></video>
+    <div class="toast" id="toast"></div>
     <script>
         const video = document.getElementById('camera');
         const canvas = document.getElementById('capture');
         const annotated = document.getElementById('annotated');
         const countList = document.getElementById('countList');
+        const mediaBox = document.getElementById('mediaBox');
+        const mediaPlaceholder = document.getElementById('mediaPlaceholder');
+        const liveBadge = document.getElementById('liveBadge');
         const carLight = document.getElementById('carLight');
         const carLightText = document.getElementById('carLightText');
         const pedLight = document.getElementById('pedLight');
         const pedLightText = document.getElementById('pedLightText');
         const statusEl = document.getElementById('status');
         const logicNote = document.getElementById('logicNote');
+        const toastEl = document.getElementById('toast');
         const fpsInput = document.getElementById('fps');
         const fpsValue = document.getElementById('fpsValue');
-        const startBtn = document.getElementById('startBtn');
-        const stopBtn = document.getElementById('stopBtn');
-        const flipBtn = document.getElementById('flipBtn');
+        const toggleBtn = document.getElementById('toggleBtn');
         const switchBtn = document.getElementById('switchBtn');
         const thresholdInput = document.getElementById('threshold');
-        const applyThresholdBtn = document.getElementById('applyThreshold');
         const thresholdValue = document.getElementById('thresholdValue');
         const modelSelect = document.getElementById('modelSelect');
-        const applyModelBtn = document.getElementById('applyModel');
 
         const placeholder = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
         annotated.src = placeholder;
         buildCountList(Array.from(modelSelect.options).map((opt) => opt.value));
         updateThresholdDisplay();
+        setDetectionActive(false);
 
         let stream = null;
         let timer = null;
         let busy = false;
-        let flipped = false;
         let facingMode = 'environment';
+        let thresholdTimer = null;
 
         function setStatus(text) {
             statusEl.textContent = text;
@@ -820,15 +998,23 @@ def index():
             pedLightText.textContent = pedState;
         }
 
-        function applyFlip() {
-            if (flipped) {
-                video.classList.add('flipped');
-                annotated.classList.add('flipped');
-                flipBtn.textContent = 'Unflip view';
+        function setDetectionActive(active) {
+            if (active) {
+                mediaBox.classList.add('is-live');
+                mediaPlaceholder.classList.add('hidden');
+                liveBadge.classList.remove('hidden');
             } else {
-                video.classList.remove('flipped');
-                annotated.classList.remove('flipped');
-                flipBtn.textContent = 'Flip view';
+                mediaBox.classList.remove('is-live');
+                mediaPlaceholder.classList.remove('hidden');
+                liveBadge.classList.add('hidden');
+            }
+        }
+
+        function setProcessing(active) {
+            if (active) {
+                mediaBox.classList.add('is-processing');
+            } else {
+                mediaBox.classList.remove('is-processing');
             }
         }
 
@@ -860,6 +1046,14 @@ def index():
                 'Need at least ' + threshold +
                 ' vehicles for the car light to switch green. If there are fewer than ' +
                 threshold + ' vehicles, pedestrians can cross.';
+        }
+
+        function showToast(message, durationMs = 5000) {
+            toastEl.textContent = message;
+            toastEl.classList.add('show');
+            setTimeout(() => {
+                toastEl.classList.remove('show');
+            }, durationMs);
         }
 
         function modelLabel(name) {
@@ -909,6 +1103,7 @@ def index():
             });
         }
 
+
         async function loadConfig() {
             try {
                 const res = await fetch('/config');
@@ -917,9 +1112,10 @@ def index():
                 }
                 const data = await res.json();
                 if (data.server_capture) {
-                    startBtn.disabled = true;
-                    stopBtn.disabled = true;
+                    toggleBtn.disabled = true;
+                    switchBtn.disabled = true;
                     annotated.src = '/stream';
+                    setDetectionActive(true);
                     setStatus('Server capture mode. Watching stream...');
                     pollStatus();
                 }
@@ -940,6 +1136,10 @@ def index():
                 if (typeof data.model === 'string') {
                     modelSelect.value = data.model;
                 }
+                updateLogicNote();
+                const t = Number(thresholdInput.value || 5);
+                const display = Number.isFinite(t) ? t : 5;
+                showToast('If there are fewer than ' + display + ' vehicles, pedestrians can cross.');
             } catch (err) {
                 // ignore
             }
@@ -993,6 +1193,7 @@ def index():
             if (stream) {
                 return;
             }
+            setStatus('Requesting camera access...');
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: { facingMode: { ideal: facingMode } },
@@ -1000,12 +1201,13 @@ def index():
                 });
                 video.srcObject = stream;
                 await video.play();
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
+                toggleBtn.textContent = 'Stop detection';
+                setDetectionActive(true);
                 setStatus('Camera active. Running detection...');
                 const fps = Number(fpsInput.value || 4);
                 timer = setInterval(captureAndSend, 1000 / Math.max(fps, 1));
             } catch (err) {
+                setDetectionActive(false);
                 setStatus('Camera access denied or unavailable.');
             }
         }
@@ -1019,8 +1221,8 @@ def index():
                 stream.getTracks().forEach((track) => track.stop());
                 stream = null;
             }
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
+            toggleBtn.textContent = 'Start detection';
+            setDetectionActive(false);
             setStatus('Camera stopped.');
         }
 
@@ -1037,9 +1239,11 @@ def index():
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0, width, height);
             busy = true;
+            setProcessing(true);
             canvas.toBlob(async (blob) => {
                 if (!blob) {
                     busy = false;
+                    setProcessing(false);
                     return;
                 }
                 try {
@@ -1079,6 +1283,7 @@ def index():
                     setStatus('Error: ' + err.message);
                 } finally {
                     busy = false;
+                    setProcessing(false);
                 }
             }, 'image/jpeg', 0.7);
         }
@@ -1122,12 +1327,17 @@ def index():
         thresholdInput.addEventListener('input', () => {
             updateThresholdDisplay();
             updateLogicNote();
+            if (thresholdTimer) {
+                clearTimeout(thresholdTimer);
+            }
+            thresholdTimer = setTimeout(applyThreshold, 250);
         });
-        startBtn.addEventListener('click', startCamera);
-        stopBtn.addEventListener('click', stopCamera);
-        flipBtn.addEventListener('click', () => {
-            flipped = !flipped;
-            applyFlip();
+        toggleBtn.addEventListener('click', () => {
+            if (stream) {
+                stopCamera();
+            } else {
+                startCamera();
+            }
         });
         switchBtn.addEventListener('click', async () => {
             facingMode = facingMode === 'environment' ? 'user' : 'environment';
@@ -1138,9 +1348,7 @@ def index():
             }
         });
         thresholdInput.addEventListener('change', applyThreshold);
-        applyThresholdBtn.addEventListener('click', applyThreshold);
         modelSelect.addEventListener('change', applyModel);
-        applyModelBtn.addEventListener('click', applyModel);
         loadConfig();
         updateLogicNote();
     </script>
