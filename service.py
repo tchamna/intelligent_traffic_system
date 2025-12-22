@@ -1139,7 +1139,7 @@ def index():
                 updateLogicNote();
                 const t = Number(thresholdInput.value || 5);
                 const display = Number.isFinite(t) ? t : 5;
-                showToast('If there are fewer than ' + display + ' vehicles, pedestrians can cross.');
+                showToast('If there are fewer than ' + display + ' vehicles, pedestrians can cross. You can set this threshold from the menu.', 8000);
             } catch (err) {
                 // ignore
             }
